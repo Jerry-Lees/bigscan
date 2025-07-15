@@ -506,44 +506,146 @@ class BigIPInfoExtractor:
             'tmm_memory': 'N/A'
         })
         
-        # Method 1: Try sys/memory endpoints
-        memory_data = self.api_request("sys/memory")
-        if memory_data and 'entries' in memory_data:
-            memory_urls = list(memory_data['entries'].keys())
-            print(f"    Found memory URLs: {len(memory_urls)} endpoints")
-            
-            # Process each memory endpoint
-            for memory_url in memory_urls:
-                if memory_url.startswith('https://') and '/mgmt/tm/' in memory_url:
-                    endpoint = memory_url.split('/mgmt/tm/')[-1]
-                    print(f"    Calling memory endpoint: {endpoint}")
-                    
-                    mem_detail = self.api_request(endpoint)
-                    if mem_detail:
-                        # Process based on memory type
-                        if 'memory-host' in memory_url:
-                            self._extract_host_memory_improved(mem_detail)
-                        elif 'memory-tmm' in memory_url:
-                            self._extract_tmm_memory_improved(mem_detail)
+        # Method 1: Try sys/tmm-info for TMM memory (this works!)
+        print("    Trying sys/tmm-info for TMM memory...")
+        tmm_info = self.api_request("sys/tmm-info")
+        if tmm_info and 'entries' in tmm_info:
+            for entry_name, entry_data in tmm_info['entries'].items():
+                if 'nestedStats' in entry_data:
+                    nested_entries = entry_data['nestedStats'].get('entries', {})
+                    for field_name, field_data in nested_entries.items():
+                        if 'memory' in field_name.lower() and isinstance(field_data, dict):
+                            value = field_data.get('description') or field_data.get('value')
+                            if value and str(value).replace('.', '').isdigit():
+                                formatted_mem = self._format_memory_value(value)
+                                self.device_info['tmm_memory'] = formatted_mem
+                                print(f"    Found TMM memory: {formatted_mem}")
+                                break
         
-        # Method 2: Try sys/hostinfo as fallback
-        if self.device_info['total_memory'] == 'N/A':
-            print("    Trying sys/hostinfo for memory...")
-            hostinfo_data = self.api_request("sys/hostinfo")
-            if hostinfo_data and 'entries' in hostinfo_data:
-                for entry_name, entry_data in hostinfo_data['entries'].items():
-                    nested_stats = entry_data.get('nestedStats', {})
-                    entries = nested_stats.get('entries', {})
-                    
-                    for field_name, field_data in entries.items():
-                        if isinstance(field_data, dict) and 'memory' in field_name.lower():
+        # Method 2: Try sys/host-info for host memory
+        print("    Trying sys/host-info for host memory...")
+        host_info = self.api_request("sys/host-info")
+        if host_info and 'entries' in host_info:
+            for entry_name, entry_data in host_info['entries'].items():
+                if 'nestedStats' in entry_data:
+                    nested_entries = entry_data['nestedStats'].get('entries', {})
+                    for field_name, field_data in nested_entries.items():
+                        if 'memory' in field_name.lower() and isinstance(field_data, dict):
                             value = field_data.get('description') or field_data.get('value')
                             if value:
-                                if 'total' in field_name.lower():
-                                    self.device_info['total_memory'] = self._format_memory_value(value)
-                                    print(f"    Found total memory from hostinfo: {value}")
+                                formatted_mem = self._format_memory_value(value)
+                                if 'total' in field_name.lower() and self.device_info['total_memory'] == 'N/A':
+                                    self.device_info['total_memory'] = formatted_mem
+                                    print(f"    Found total memory: {formatted_mem}")
+                                elif 'used' in field_name.lower() and self.device_info['memory_used'] == 'N/A':
+                                    self.device_info['memory_used'] = formatted_mem
+                                    print(f"    Found used memory: {formatted_mem}")
         
-        print(f"    Memory Summary: Total={self.device_info.get('total_memory', 'N/A')}, Used={self.device_info.get('memory_used', 'N/A')}, TMM={self.device_info.get('tmm_memory', 'N/A')}")
+        # Method 3: Try sys/platform for memory info
+        if self.device_info['total_memory'] == 'N/A':
+            print("    Trying sys/platform for memory...")
+            platform_info = self.api_request("sys/platform")
+            if platform_info and 'entries' in platform_info:
+                for entry_name, entry_data in platform_info['entries'].items():
+                    if 'nestedStats' in entry_data:
+                        nested_entries = entry_data['nestedStats'].get('entries', {})
+                        for field_name, field_data in nested_entries.items():
+                            if 'memory' in field_name.lower() and isinstance(field_data, dict):
+                                value = field_data.get('description') or field_data.get('value')
+                                if value:
+                                    formatted_mem = self._format_memory_value(value)
+                                    if formatted_mem != 'N/A' and self.device_info['total_memory'] == 'N/A':
+                                        self.device_info['total_memory'] = formatted_mem
+                                        print(f"    Found memory in platform: {formatted_mem}")
+                                        break
+        
+        # Method 4: Try sys/version for memory info (sometimes has hardware details)
+        if self.device_info['total_memory'] == 'N/A':
+            print("    Trying sys/version for memory...")
+            version_info = self.api_request("sys/version")
+            if version_info and 'entries' in version_info:
+                for entry_name, entry_data in version_info['entries'].items():
+                    if 'nestedStats' in entry_data:
+                        nested_entries = entry_data['nestedStats'].get('entries', {})
+                        for field_name, field_data in nested_entries.items():
+                            field_lower = field_name.lower()
+                            if any(mem_word in field_lower for mem_word in ['memory', 'ram']) and isinstance(field_data, dict):
+                                value = field_data.get('description') or field_data.get('value')
+                                if value:
+                                    # sys/version might have memory info in description
+                                    value_str = str(value)
+                                    if any(unit in value_str.upper() for unit in ['GB', 'MB']) or 'memory' in value_str.lower():
+                                        formatted_mem = self._format_memory_value(value_str)
+                                        if formatted_mem != 'N/A' and self.device_info['total_memory'] == 'N/A':
+                                            self.device_info['total_memory'] = formatted_mem
+                                            print(f"    Found memory in version: {formatted_mem}")
+                                            break
+        
+        # Method 5: Try limited hardware search (avoid infinite loops)
+        if self.device_info['total_memory'] == 'N/A':
+            print("    Trying limited sys/hardware search...")
+            hardware_data = self.api_request("sys/hardware")
+            if hardware_data and 'entries' in hardware_data:
+                # Only search top-level and one level deep
+                for entry_name, entry_data in hardware_data['entries'].items():
+                    if 'nestedStats' in entry_data:
+                        nested_entries = entry_data['nestedStats'].get('entries', {})
+                        for field_name, field_data in nested_entries.items():
+                            if 'memory' in field_name.lower() and isinstance(field_data, dict):
+                                value = field_data.get('description') or field_data.get('value')
+                                if value:
+                                    formatted_mem = self._format_memory_value(value)
+                                    if formatted_mem != 'N/A' and self.device_info['total_memory'] == 'N/A':
+                                        self.device_info['total_memory'] = formatted_mem
+                                        print(f"    Found memory in hardware: {formatted_mem}")
+                                        break
+                    if self.device_info['total_memory'] != 'N/A':
+                        break
+        
+        print(f"    Memory Results: Total={self.device_info['total_memory']}, Used={self.device_info['memory_used']}, TMM={self.device_info['tmm_memory']}")
+    
+    def _find_memory_in_hardware(self, data, visited=None):
+        """Search for memory information in hardware data with cycle detection"""
+        # This method is no longer used to avoid complexity
+        return None
+    
+    def _search_for_memory_value(self, data, visited=None):
+        """Search for any memory-related values in data structure"""
+        if visited is None:
+            visited = set()
+        
+        data_id = id(data)
+        if data_id in visited or len(visited) > 5:  # Much stricter limit
+            return None
+        visited.add(data_id)
+        
+        if isinstance(data, dict):
+            for key, value in data.items():
+                key_lower = key.lower()
+                if any(mem_word in key_lower for mem_word in ['memory', 'ram', 'mem']):
+                    if isinstance(value, (str, int, float)):
+                        value_str = str(value)
+                        # Check if it looks like memory data
+                        if any(unit in value_str.upper() for unit in ['GB', 'MB', 'KB']):
+                            formatted = self._format_memory_value(value_str)
+                            if formatted != 'N/A':
+                                visited.remove(data_id)
+                                return formatted
+                        elif value_str.replace('.', '').isdigit() and int(value_str.replace('.', '')) > 1000000:
+                            formatted = self._format_memory_value(value_str)
+                            if formatted != 'N/A':
+                                visited.remove(data_id)
+                                return formatted
+                
+                # Very limited recursion
+                if isinstance(value, dict) and len(visited) < 3:
+                    result = self._search_for_memory_value(value, visited)
+                    if result:
+                        visited.remove(data_id)
+                        return result
+        
+        visited.remove(data_id)
+        return None
     
     def _extract_host_memory_improved(self, host_mem_data):
         """Improved host memory extraction"""
