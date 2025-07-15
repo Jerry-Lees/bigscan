@@ -784,42 +784,120 @@ class BigIPInfoExtractor:
         """Extract additional useful information"""
         try:
             # System clock/time
+            print("  Getting system time...")
             clock_data = self.api_request("sys/clock")
             if clock_data:
-                self.device_info['system_time'] = clock_data.get('fullDate', 'N/A')
-            else:
+                # Check for fullDate field
+                if 'fullDate' in clock_data:
+                    raw_time = clock_data['fullDate']
+                    formatted_time = self._format_system_time(raw_time)
+                    self.device_info['system_time'] = formatted_time
+                    print(f"    Found system time: {raw_time} -> {formatted_time}")
+                # Also check entries structure
+                elif 'entries' in clock_data:
+                    for entry_name, entry_data in clock_data['entries'].items():
+                        nested_stats = entry_data.get('nestedStats', {})
+                        entries = nested_stats.get('entries', {})
+                        
+                        # Look for time-related fields
+                        for field_name, field_data in entries.items():
+                            if any(time_field in field_name.lower() for time_field in ['date', 'time', 'clock']):
+                                if isinstance(field_data, dict) and 'description' in field_data:
+                                    raw_time = field_data['description']
+                                    if raw_time and raw_time.strip():
+                                        formatted_time = self._format_system_time(raw_time)
+                                        self.device_info['system_time'] = formatted_time
+                                        print(f"    Found system time in {field_name}: {raw_time} -> {formatted_time}")
+                                        break
+                        if self.device_info.get('system_time', 'N/A') != 'N/A':
+                            break
+                
+                # If still not found, try to extract from any field
+                if self.device_info.get('system_time', 'N/A') == 'N/A':
+                    # Convert response to string and look for date patterns
+                    clock_str = str(clock_data)
+                    print(f"    Clock data structure: {list(clock_data.keys()) if isinstance(clock_data, dict) else 'Not a dict'}")
+                    # You might want to add regex patterns here to extract dates
+            
+            if self.device_info.get('system_time', 'N/A') == 'N/A':
                 self.device_info['system_time'] = 'N/A'
+                print("    System time not found")
             
             # Memory information
+            print("  Getting memory information...")
             memory_data = self.api_request("sys/memory")
             if memory_data and 'entries' in memory_data:
                 for entry_name, entry_data in memory_data['entries'].items():
-                    if 'TMM Memory' in entry_name:
-                        nested_stats = entry_data.get('nestedStats', {}).get('entries', {})
-                        if 'Total' in nested_stats:
-                            self.device_info['total_memory'] = nested_stats['Total'].get('value', 'N/A')
-                            break
-                else:
-                    self.device_info['total_memory'] = 'N/A'
+                    nested_stats = entry_data.get('nestedStats', {})
+                    entries = nested_stats.get('entries', {})
+                    
+                    # Look for TMM Memory or Total memory
+                    for field_name, field_data in entries.items():
+                        if 'total' in field_name.lower() or 'memory' in field_name.lower():
+                            if isinstance(field_data, dict) and 'value' in field_data:
+                                memory_value = field_data['value']
+                                self.device_info['total_memory'] = memory_value
+                                print(f"    Found memory in {field_name}: {memory_value}")
+                                break
+                            elif isinstance(field_data, dict) and 'description' in field_data:
+                                memory_value = field_data['description']
+                                if memory_value and memory_value.strip():
+                                    self.device_info['total_memory'] = memory_value.strip()
+                                    print(f"    Found memory in {field_name}: {memory_value}")
+                                    break
+                    if self.device_info.get('total_memory', 'N/A') != 'N/A':
+                        break
+                
+                if self.device_info.get('total_memory', 'N/A') == 'N/A':
+                    print(f"    Memory entries found: {list(memory_data.get('entries', {}).keys())}")
             else:
                 self.device_info['total_memory'] = 'N/A'
+                print("    Memory data not available")
             
             # CPU information
+            print("  Getting CPU information...")
             cpu_data = self.api_request("sys/cpu")
             if cpu_data and 'entries' in cpu_data:
-                self.device_info['cpu_count'] = len(cpu_data['entries'])
+                cpu_count = len(cpu_data['entries'])
+                self.device_info['cpu_count'] = cpu_count
+                print(f"    Found {cpu_count} CPU entries")
             else:
                 self.device_info['cpu_count'] = 'N/A'
+                print("    CPU data not available")
             
             # HA status
+            print("  Getting HA status...")
             try:
                 failover_data = self.api_request("sys/failover")
                 if failover_data:
-                    self.device_info['ha_status'] = failover_data.get('status', 'N/A')
+                    if 'status' in failover_data:
+                        self.device_info['ha_status'] = failover_data['status']
+                        print(f"    Found HA status: {failover_data['status']}")
+                    elif 'entries' in failover_data:
+                        # Look through entries for status information
+                        for entry_name, entry_data in failover_data['entries'].items():
+                            nested_stats = entry_data.get('nestedStats', {})
+                            entries = nested_stats.get('entries', {})
+                            
+                            for field_name, field_data in entries.items():
+                                if 'status' in field_name.lower() or 'state' in field_name.lower():
+                                    if isinstance(field_data, dict) and 'description' in field_data:
+                                        status_value = field_data['description']
+                                        if status_value and status_value.strip():
+                                            self.device_info['ha_status'] = status_value.strip()
+                                            print(f"    Found HA status in {field_name}: {status_value}")
+                                            break
+                            if self.device_info.get('ha_status', 'N/A') != 'N/A':
+                                break
+                    else:
+                        print(f"    Failover data structure: {list(failover_data.keys())}")
+                        self.device_info['ha_status'] = 'Unknown'
                 else:
                     self.device_info['ha_status'] = 'Standalone'
+                    print("    No failover data - assuming Standalone")
             except:
                 self.device_info['ha_status'] = 'Standalone'
+                print("    Failover API not available - assuming Standalone")
             
             # Management IP
             self.device_info['management_ip'] = self.host
@@ -833,6 +911,116 @@ class BigIPInfoExtractor:
                 'ha_status': 'N/A',
                 'management_ip': self.host
             })
+    
+    def _format_system_time(self, time_string):
+        """Convert system time to standard format in local timezone (YYYY-MM-DD HH:MM:SS)"""
+        if not time_string or time_string.strip() == '':
+            return 'N/A'
+        
+        try:
+            from datetime import datetime, timezone
+            import time
+            
+            # Common BIG-IP time formats to try
+            time_formats = [
+                ('%Y-%m-%dT%H:%M:%SZ', True),         # 2025-07-15T03:28:35Z (ISO 8601 UTC)
+                ('%Y-%m-%dT%H:%M:%S', False),         # 2025-07-15T03:28:35 (assume local)
+                ('%Y-%m-%d %H:%M:%S', False),         # 2025-07-14 15:30:45 (assume local)
+                ('%a %b %d %H:%M:%S %Z %Y', True),    # Wed Jul 14 15:30:45 UTC 2025
+                ('%a %b %d %H:%M:%S %Y', False),      # Wed Jul 14 15:30:45 2025 (assume local)
+                ('%m/%d/%Y %H:%M:%S', False),         # 07/14/2025 15:30:45 (assume local)
+                ('%b %d %Y %H:%M:%S', False),         # Jul 14 2025 15:30:45 (assume local)
+                ('%d %b %Y %H:%M:%S', False),         # 14 Jul 2025 15:30:45 (assume local)
+                ('%Y-%m-%dT%H:%M:%S.%fZ', True),      # 2025-07-15T03:28:35.123456Z (with microseconds)
+                ('%Y-%m-%dT%H:%M:%S.%f', False),      # 2025-07-15T03:28:35.123456 (assume local)
+            ]
+            
+            time_string = time_string.strip()
+            
+            # Try each format
+            for fmt, is_utc in time_formats:
+                try:
+                    dt = datetime.strptime(time_string, fmt)
+                    
+                    if is_utc:
+                        # Convert from UTC to local timezone
+                        dt = dt.replace(tzinfo=timezone.utc)
+                        local_dt = dt.astimezone()
+                        formatted_time = local_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        print(f"    Converted UTC time: {time_string} -> {formatted_time} (local)")
+                    else:
+                        # Assume it's already in local time
+                        formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+                        print(f"    Converted local time: {time_string} -> {formatted_time}")
+                    
+                    return formatted_time
+                except ValueError:
+                    continue
+            
+            # If no format matches, try to extract basic components with regex
+            import re
+            
+            # Pattern for ISO 8601 format variations (assume UTC if Z suffix)
+            iso_pattern = r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z?)'
+            iso_match = re.search(iso_pattern, time_string)
+            
+            if iso_match:
+                year, month, day, hour, minute, second, microsecond, z_suffix = iso_match.groups()
+                dt = datetime(int(year), int(month), int(day), 
+                            int(hour), int(minute), int(second))
+                
+                if z_suffix == 'Z':
+                    # UTC time, convert to local
+                    dt = dt.replace(tzinfo=timezone.utc)
+                    local_dt = dt.astimezone()
+                    formatted_time = local_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"    Converted UTC time via regex: {time_string} -> {formatted_time} (local)")
+                else:
+                    # Assume local time
+                    formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"    Converted local time via regex: {time_string} -> {formatted_time}")
+                
+                return formatted_time
+            
+            # Pattern for common date/time components with timezone detection
+            # Try to extract: Jul 14 15:30:45 UTC 2025 or similar
+            pattern = r'(\w{3})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s+(?:(\w+)\s+)?(\d{4})'
+            match = re.search(pattern, time_string)
+            
+            if match:
+                month_name, day, hour, minute, second, tz_name, year = match.groups()
+                
+                # Convert month name to number
+                months = {
+                    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+                }
+                
+                month_num = months.get(month_name.lower(), 1)
+                
+                # Create datetime object
+                dt = datetime(int(year), month_num, int(day), 
+                            int(hour), int(minute), int(second))
+                
+                # Check if timezone is UTC
+                if tz_name and tz_name.upper() in ['UTC', 'GMT']:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                    local_dt = dt.astimezone()
+                    formatted_time = local_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"    Converted UTC time via month regex: {time_string} -> {formatted_time} (local)")
+                else:
+                    formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"    Converted local time via month regex: {time_string} -> {formatted_time}")
+                
+                return formatted_time
+            
+            # If all else fails, return the original string
+            print(f"    Warning: Could not parse time format: {time_string}")
+            return time_string
+            
+        except Exception as e:
+            print(f"    Error formatting time '{time_string}': {str(e)}")
+            return time_string
     
     def extract_all_info(self):
         """Extract all device information"""
@@ -1314,5 +1502,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
-
 
