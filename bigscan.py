@@ -10,12 +10,16 @@ Requirements:
     pip install requests urllib3
 
 Usage:
-    python bigip_info.py [--user USERNAME] [--pass PASSWORD] [--out FILENAME] [--in INPUT_CSV] [--help]
+    python bigscan.py [--user USERNAME] [--pass PASSWORD] [--out FILENAME] [--in INPUT_CSV] [--help]
     
 Examples:
-    python bigip_info.py                                    # Interactive mode
-    python bigip_info.py --user admin                       # Specify user, prompt for password
-    python bigip_info.py --user admin --pass mypassword     # Specify both credentials
+    python bigscan.py                                              # Interactive mode
+    python bigscan.py --user admin                                 # Specify user, prompt for password  
+    python bigscan.py --user admin --pass mypassword               # Specify both credentials
+    python bigscan.py --user admin --out my_devices.csv            # Specify output file
+    python bigscan.py -u admin -p mypass -o device_report.csv      # Short form options
+    python bigscan.py --in devices.csv --out results.csv           # Bulk processing from CSV
+    python bigscan.py --in devices.csv --user admin                # CSV with fallback credentials
 """
 
 import csv
@@ -107,11 +111,6 @@ class BigIPInfoExtractor:
             
             if response.status_code == 200:
                 data = response.json()
-                # Search for target serial in the response
-                response_str = str(data)
-                if 'dfac18d2-466d-fc43-5cb74c9d3b49' in response_str:
-                    print(f"    *** FOUND TARGET SERIAL in {selflink_url} ***")
-                    print(f"    Response contains: {response_str[:500]}...")
                 return data
             else:
                 print(f"SelfLink request failed for {selflink_url}: {response.status_code}")
@@ -182,109 +181,37 @@ class BigIPInfoExtractor:
                                     print(f"    Found platform in system-info: {platform}")
                                     return platform
             
-            # Method 2: Look in platform section 
-            for entry_url, entry_data in entries.items():
-                if 'platform' in entry_url and 'system-info' not in entry_url:
-                    print(f"    Checking platform section: {entry_url}")
-                    
-                    nested_stats = entry_data.get('nestedStats', {})
-                    nested_entries = nested_stats.get('entries', {})
-                    
-                    for nested_url, nested_data in nested_entries.items():
-                        if 'platform/0' in nested_url:
-                            platform_stats = nested_data.get('nestedStats', {})
-                            platform_entries = platform_stats.get('entries', {})
-                            
-                            # Look for any field that might contain platform/type info
-                            for field_name, field_data in platform_entries.items():
-                                if 'platform' in field_name.lower() or 'type' in field_name.lower() or 'marketing' in field_name.lower():
-                                    if isinstance(field_data, dict) and 'description' in field_data:
-                                        platform_val = field_data['description']
-                                        if platform_val and platform_val.strip() and platform_val != ' ':
-                                            print(f"    Found platform info in {field_name}: {platform_val}")
-                                            return platform_val.strip()
-            
-            # Method 3: Recursive search for platform-related fields
-            platform = self._find_platform_recursive(hardware_data)
-            if platform:
-                return platform
-            
             return None
             
         except Exception as e:
             print(f"    Error extracting platform: {str(e)}")
             return None
     
-    def _find_platform_recursive(self, data):
-        """Recursively search for platform information in hardware data"""
-        if isinstance(data, dict):
-            for key, value in data.items():
-                # Look for platform-related keys
-                if key.lower() in ['platform', 'type', 'marketingname', 'model']:
-                    if isinstance(value, dict) and 'description' in value:
-                        platform_val = value['description']
-                        if platform_val and platform_val.strip() and platform_val not in [' ', '-', 'N/A']:
-                            print(f"    Found platform via recursive search in {key}: {platform_val}")
-                            return platform_val.strip()
-                    elif isinstance(value, str) and value.strip() and value not in [' ', '-', 'N/A']:
-                        print(f"    Found platform via recursive search in {key}: {value}")
-                        return value.strip()
-                elif isinstance(value, (dict, list)):
-                    result = self._find_platform_recursive(value)
-                    if result:
-                        return result
-        elif isinstance(data, list):
-            for item in data:
-                result = self._find_platform_recursive(item)
-                if result:
-                    return result
-        
-        return None
-    
     def get_device_serial(self):
         """Extract device serial number"""
         try:
             print("  Searching for chassis serial number...")
-            target_serial = "dfac18d2-466d-fc43-5cb74c9d3b49"
             
-            # Method 1: Check sys/hardware directly for bigipChassisSerialNum
+            # Check sys/hardware directly for bigipChassisSerialNum
             print("  Checking sys/hardware for bigipChassisSerialNum...")
             hardware_data = self.api_request("sys/hardware")
             
             if hardware_data:
-                # Search the entire response for our target serial
-                response_str = str(hardware_data)
-                if target_serial in response_str:
-                    print(f"  Found target serial in sys/hardware response!")
-                    
-                    # Now extract it properly from the structure
-                    serial = self._extract_chassis_serial_from_hardware(hardware_data)
-                    if serial:
-                        self.device_info['serial_number'] = serial
-                        print(f"  SUCCESS: Found chassis serial: {serial}")
-                        return
+                # Extract it properly from the structure
+                serial = self._extract_chassis_serial_from_hardware(hardware_data)
+                if serial:
+                    self.device_info['serial_number'] = serial
+                    print(f"  SUCCESS: Found chassis serial: {serial}")
+                    return
                 
-                # Also try to extract bigipChassisSerialNum specifically
+                # Also try to extract bigipChassisSerialNum recursively
                 serial = self._find_bigip_chassis_serial(hardware_data)
                 if serial:
                     self.device_info['serial_number'] = serial
                     print(f"  SUCCESS: Found bigipChassisSerialNum: {serial}")
                     return
             
-            # Method 2: Try other endpoints as backup
-            backup_endpoints = ['sys/host-info', 'sys/license', 'sys/version']
-            
-            for endpoint in backup_endpoints:
-                print(f"  Checking {endpoint} as backup...")
-                data = self.api_request(endpoint)
-                if data:
-                    response_str = str(data)
-                    if target_serial in response_str:
-                        print(f"  Found target serial in {endpoint}!")
-                        self.device_info['serial_number'] = target_serial
-                        return
-            
-            print(f"  Target serial {target_serial} not found in any location")
+            print("  Chassis serial number not found")
             self.device_info['serial_number'] = 'N/A'
             
         except Exception as e:
@@ -348,193 +275,16 @@ class BigIPInfoExtractor:
         
         return None
     
-    def _search_for_target_serial(self, data, target_serial):
-        """Search for the target serial number in any data structure"""
-        if not data:
-            return None
-        
-        # Convert entire response to string and search
-        data_str = str(data)
-        if target_serial in data_str:
-            print(f"      *** FOUND TARGET SERIAL: {target_serial} ***")
-            return target_serial
-        
-        # Also search for any UUID-like patterns as backup
-        import re
-        uuid_patterns = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12,16}', data_str)
-        for pattern in uuid_patterns:
-            if len(pattern) > 30:  # Similar length to target serial
-                print(f"      Found similar UUID pattern: {pattern}")
-                # You can uncomment the line below if you want to use any UUID as fallback
-                # return pattern
-        
-        return None
-    
-    def _extract_serial_from_nested_data(self, data, source):
-        """Extract serial from nested hardware data"""
-        if not data:
-            return None
-            
-        print(f"      Examining nested data from {source}")
-        
-        if isinstance(data, dict):
-            # Check for direct serial fields
-            for key, value in data.items():
-                if 'serial' in key.lower() and isinstance(value, str) and value.strip():
-                    print(f"      Found serial field {key}: {value}")
-                    return value.strip()
-            
-            # Check entries structure
-            if 'entries' in data:
-                for entry_name, entry_data in data['entries'].items():
-                    if isinstance(entry_data, dict):
-                        nested_stats = entry_data.get('nestedStats', {})
-                        entries = nested_stats.get('entries', {})
-                        
-                        print(f"        Nested entry {entry_name} has fields: {list(entries.keys())}")
-                        
-                        # Look for serial-related fields
-                        for field_name, field_data in entries.items():
-                            if isinstance(field_data, dict) and 'description' in field_data:
-                                desc = field_data['description']
-                                print(f"          {field_name}: {desc}")
-                                
-                                # Check for serial keywords or UUID pattern
-                                if ('serial' in field_name.lower() or 
-                                    'chassis' in field_name.lower() or
-                                    (isinstance(desc, str) and '-' in desc and len(desc) > 30)):
-                                    if desc and desc.strip() and desc != 'N/A':
-                                        print(f"        Found potential serial: {desc}")
-                                        return desc.strip()
-        
-        return None
-    
-    def _deep_search_hardware_urls(self):
-        """Search all hardware nested URLs for serial information"""
-        hardware_data = self.api_request("sys/hardware")
-        
-        if not hardware_data or 'entries' not in hardware_data:
-            return
-            
-        for entry_url, entry_data in hardware_data['entries'].items():
-            print(f"    Deep searching: {entry_url}")
-            
-            nested_stats = entry_data.get('nestedStats', {})
-            nested_entries = nested_stats.get('entries', {})
-            
-            # Follow all nested URLs
-            for nested_url in nested_entries.keys():
-                if nested_url.startswith('https://'):
-                    if '/mgmt/tm/' in nested_url:
-                        nested_endpoint = nested_url.split('/mgmt/tm/')[-1]
-                        print(f"      Trying deep endpoint: {nested_endpoint}")
-                        
-                        nested_data = self.api_request(nested_endpoint)
-                        if nested_data:
-                            # Convert to string and search for UUID pattern
-                            data_str = str(nested_data).lower()
-                            if 'dfac18d2' in data_str:
-                                print(f"      FOUND target serial pattern in {nested_endpoint}!")
-                                # Extract the actual serial from the data
-                                import re
-                                pattern = r'dfac18d2-466d-fc43-[a-f0-9]{12,16}'
-                                match = re.search(pattern, str(nested_data))
-                                if match:
-                                    self.device_info['serial_number'] = match.group(0)
-                                    print(f"      Extracted serial: {match.group(0)}")
-                                    return
-                            
-                            # Also try the structured approach
-                            serial = self._extract_serial_from_nested_data(nested_data, nested_endpoint)
-                            if serial:
-                                self.device_info['serial_number'] = serial
-                                return
-    
-    def _extract_serial_from_data(self, data, source_name):
-        """Helper method to extract serial from any data structure"""
-        if not data:
-            return
-            
-        print(f"    Examining {source_name} data structure...")
-        
-        if isinstance(data, dict):
-            # Check top level for any serial-like fields
-            for key, value in data.items():
-                if 'serial' in key.lower() and isinstance(value, str):
-                    print(f"    Found top-level serial field {key}: {value}")
-                    if value.strip() and value != 'N/A':
-                        self.device_info['serial_number'] = value.strip()
-                        return
-            
-            # Check entries structure
-            if 'entries' in data:
-                for entry_name, entry_data in data['entries'].items():
-                    if isinstance(entry_data, dict):
-                        nested_stats = entry_data.get('nestedStats', {})
-                        entries = nested_stats.get('entries', {})
-                        
-                        # Look for serial fields
-                        for field_name, field_data in entries.items():
-                            if isinstance(field_data, dict) and 'description' in field_data:
-                                desc = field_data['description']
-                                print(f"      {field_name}: {desc}")
-                                
-                                # Check for chassis serial or UUID pattern
-                                if ('serial' in field_name.lower() or 
-                                    (isinstance(desc, str) and '-' in desc and len(desc) > 30)):
-                                    if desc.strip() and desc != 'N/A':
-                                        self.device_info['serial_number'] = desc.strip()
-                                        print(f"    SUCCESS: Found serial in {field_name}: {desc}")
-                                        return
-    
-    def _search_for_uuid_pattern(self):
-        """Search for the specific UUID pattern in all hardware endpoints"""
-        endpoints = [
-            "sys/hardware",
-            "sys/hardware/chassis-info", 
-            "sys/hardware/system-info",
-            "sys/hardware/platform",
-            "sys/hardware/hardware-version"
-        ]
-        
-        target_pattern = "dfac18d2-466d-fc43-5cb74c9d3b49"
-        
-        for endpoint in endpoints:
-            print(f"    Searching {endpoint} for UUID pattern...")
-            data = self.api_request(endpoint)
-            if data:
-                # Convert entire response to string and search for the pattern
-                data_str = str(data)
-                if target_pattern in data_str:
-                    print(f"    FOUND target serial in {endpoint}!")
-                    self.device_info['serial_number'] = target_pattern
-                    return
-                
-                # Also search for any UUID-like pattern
-                import re
-                uuid_pattern = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12,16}'
-                matches = re.findall(uuid_pattern, data_str)
-                if matches:
-                    print(f"    Found UUID patterns in {endpoint}: {matches}")
-                    # Use the first UUID that looks like a serial
-                    for match in matches:
-                        if len(match) > 30:  # Your serial is 36 chars
-                            self.device_info['serial_number'] = match
-                            print(f"    Using UUID as serial: {match}")
-                            return
-    
     def get_registration_key(self):
         """Extract registration key information"""
         try:
             print("  Searching for registration key...")
             
-            # Method 1: Check sys/license for registrationKey
+            # Check sys/license for registrationKey
             print("  Checking sys/license for registration key...")
             license_data = self.api_request("sys/license")
             
             if license_data:
-                # First, search the entire response for any registration key patterns
-                response_str = str(license_data)
                 print(f"    Searching license data for registration key...")
                 
                 # Look for the registration key in the structured data
@@ -543,34 +293,8 @@ class BigIPInfoExtractor:
                     self.device_info['registration_key'] = reg_key
                     print(f"  SUCCESS: Found registration key: {reg_key}")
                     return
-                
-                # Also try recursive search for any key containing 'registration'
-                reg_key = self._find_registration_key_recursive(license_data)
-                if reg_key:
-                    self.device_info['registration_key'] = reg_key
-                    print(f"  SUCCESS: Found registration key (recursive): {reg_key}")
-                    return
             
-            # Method 2: Try other license-related endpoints
-            license_endpoints = [
-                "sys/license/registration-key",
-                "sys/db/license.key",
-                "sys/db/registration.key"
-            ]
-            
-            for endpoint in license_endpoints:
-                print(f"  Trying endpoint: {endpoint}")
-                data = self.api_request(endpoint)
-                if data:
-                    # Check for registration key in response
-                    if isinstance(data, dict) and 'value' in data:
-                        reg_key = data['value']
-                        if reg_key and reg_key.strip():
-                            self.device_info['registration_key'] = reg_key.strip()
-                            print(f"  SUCCESS: Found registration key in {endpoint}: {reg_key}")
-                            return
-            
-            print("  Registration key not found in any location")
+            print("  Registration key not found")
             self.device_info['registration_key'] = 'N/A'
             
         except Exception as e:
@@ -603,8 +327,6 @@ class BigIPInfoExtractor:
                                 if reg_key and reg_key.strip() and reg_key != '-':
                                     print(f"    Registration key value: {reg_key}")
                                     return reg_key.strip()
-                            elif isinstance(field_data, str) and field_data.strip():
-                                return field_data.strip()
             
             return None
             
@@ -612,38 +334,13 @@ class BigIPInfoExtractor:
             print(f"    Error extracting registration key: {str(e)}")
             return None
     
-    def _find_registration_key_recursive(self, data):
-        """Recursively search for registration key in any data structure"""
-        if isinstance(data, dict):
-            for key, value in data.items():
-                # Look for keys containing 'registration'
-                if 'registration' in key.lower():
-                    print(f"    Found registration field: {key}")
-                    if isinstance(value, dict) and 'description' in value:
-                        reg_key = value['description']
-                        if reg_key and reg_key.strip() and reg_key != '-':
-                            return reg_key.strip()
-                    elif isinstance(value, str) and value.strip() and value != '-':
-                        return value.strip()
-                elif isinstance(value, (dict, list)):
-                    result = self._find_registration_key_recursive(value)
-                    if result:
-                        return result
-        elif isinstance(data, list):
-            for item in data:
-                result = self._find_registration_key_recursive(item)
-                if result:
-                    return result
-        
-        return None
-    
     def get_software_version(self):
         """Extract software version information"""
         try:
             active_version = 'N/A'
             available_versions = []
             
-            # Method 1: Try sys/software/volume for boot locations
+            # Try sys/software/volume for boot locations
             print("  Checking sys/software/volume for boot locations...")
             volume_data = self.api_request("sys/software/volume")
             
@@ -669,77 +366,24 @@ class BigIPInfoExtractor:
                         active_version = volume_version
                         print(f"  Active version: {active_version}")
             
-            # Method 2: Try sys/software/image as backup
-            if not available_versions:
-                print("  Trying sys/software/image as backup...")
-                image_data = self.api_request("sys/software/image")
-                
-                if image_data and 'items' in image_data:
-                    print(f"  Found {len(image_data['items'])} software images")
-                    for image in image_data['items']:
-                        image_name = image.get('name', 'Unknown')
-                        image_version = image.get('version', 'Unknown')
-                        image_info = f"{image_name} ({image_version})"
-                        available_versions.append(image_info)
-                        
-                        if image.get('active', False):
-                            active_version = image_version
-            
-            # Method 3: Try sys/version for TMOS version if still no active version
+            # Fallback: Try sys/version for TMOS version if no active version
             if active_version == 'N/A':
                 print("  Trying sys/version for TMOS info...")
                 tmos_data = self.api_request("sys/version")
                 if tmos_data and 'entries' in tmos_data:
-                    
-                    # Look for built information which contains version
                     for entry_name, entry_data in tmos_data['entries'].items():
                         nested_stats = entry_data.get('nestedStats', {})
                         entries = nested_stats.get('entries', {})
                         
-                        # Look for version information - prioritize Built and Version
-                        if 'Built' in entries:
-                            built_info = entries['Built'].get('description', '')
-                            # Extract just the version number from built string
-                            # Example: "0.249.249 built 220630 on slot1" -> "0.249.249"
-                            if built_info:
-                                version_parts = built_info.split()
-                                if version_parts:
-                                    active_version = version_parts[0]
-                                    print(f"  Found version from Built field: {active_version}")
-                                    break
-                        
-                        elif 'Version' in entries:
+                        if 'Version' in entries:
                             version_info = entries['Version'].get('description', '')
                             if version_info and version_info != 'N/A':
                                 active_version = version_info
                                 print(f"  Found version: {active_version}")
                                 break
-                        
-                        elif 'Product' in entries:
-                            product_info = entries['Product'].get('description', '')
-                            # Sometimes product contains version info like "BIG-IP VE 16.1.0"
-                            if 'BIG-IP' in product_info and any(char.isdigit() for char in product_info):
-                                # Extract version from product string
-                                import re
-                                version_match = re.search(r'(\d+\.\d+\.\d+)', product_info)
-                                if version_match:
-                                    active_version = version_match.group(1)
-                                    print(f"  Found version from Product: {active_version}")
-                                    break
             
-            # Method 4: Try sys/software/hotfix for additional software info
+            # Check for additional software information
             print("  Checking for additional software information...")
-            hotfix_data = self.api_request("sys/software/hotfix")
-            if hotfix_data and 'items' in hotfix_data:
-                hotfix_versions = []
-                for hotfix in hotfix_data['items']:
-                    hotfix_name = hotfix.get('name', 'Unknown')
-                    hotfix_version = hotfix.get('version', 'Unknown')
-                    hotfix_info = f"Hotfix: {hotfix_name} ({hotfix_version})"
-                    hotfix_versions.append(hotfix_info)
-                
-                if hotfix_versions:
-                    available_versions.extend(hotfix_versions)
             
             self.device_info['active_version'] = active_version
             self.device_info['available_versions'] = '; '.join(available_versions) if available_versions else 'N/A'
@@ -783,76 +427,13 @@ class BigIPInfoExtractor:
     def get_additional_info(self):
         """Extract additional useful information"""
         try:
-            # System clock/time
+            # System clock/time - improved
             print("  Getting system time...")
-            clock_data = self.api_request("sys/clock")
-            if clock_data:
-                # Check for fullDate field
-                if 'fullDate' in clock_data:
-                    raw_time = clock_data['fullDate']
-                    formatted_time = self._format_system_time(raw_time)
-                    self.device_info['system_time'] = formatted_time
-                    print(f"    Found system time: {raw_time} -> {formatted_time}")
-                # Also check entries structure
-                elif 'entries' in clock_data:
-                    for entry_name, entry_data in clock_data['entries'].items():
-                        nested_stats = entry_data.get('nestedStats', {})
-                        entries = nested_stats.get('entries', {})
-                        
-                        # Look for time-related fields
-                        for field_name, field_data in entries.items():
-                            if any(time_field in field_name.lower() for time_field in ['date', 'time', 'clock']):
-                                if isinstance(field_data, dict) and 'description' in field_data:
-                                    raw_time = field_data['description']
-                                    if raw_time and raw_time.strip():
-                                        formatted_time = self._format_system_time(raw_time)
-                                        self.device_info['system_time'] = formatted_time
-                                        print(f"    Found system time in {field_name}: {raw_time} -> {formatted_time}")
-                                        break
-                        if self.device_info.get('system_time', 'N/A') != 'N/A':
-                            break
-                
-                # If still not found, try to extract from any field
-                if self.device_info.get('system_time', 'N/A') == 'N/A':
-                    # Convert response to string and look for date patterns
-                    clock_str = str(clock_data)
-                    print(f"    Clock data structure: {list(clock_data.keys()) if isinstance(clock_data, dict) else 'Not a dict'}")
-                    # You might want to add regex patterns here to extract dates
+            self._get_system_time_improved()
             
-            if self.device_info.get('system_time', 'N/A') == 'N/A':
-                self.device_info['system_time'] = 'N/A'
-                print("    System time not found")
-            
-            # Memory information
+            # Memory information - improved
             print("  Getting memory information...")
-            memory_data = self.api_request("sys/memory")
-            if memory_data and 'entries' in memory_data:
-                for entry_name, entry_data in memory_data['entries'].items():
-                    nested_stats = entry_data.get('nestedStats', {})
-                    entries = nested_stats.get('entries', {})
-                    
-                    # Look for TMM Memory or Total memory
-                    for field_name, field_data in entries.items():
-                        if 'total' in field_name.lower() or 'memory' in field_name.lower():
-                            if isinstance(field_data, dict) and 'value' in field_data:
-                                memory_value = field_data['value']
-                                self.device_info['total_memory'] = memory_value
-                                print(f"    Found memory in {field_name}: {memory_value}")
-                                break
-                            elif isinstance(field_data, dict) and 'description' in field_data:
-                                memory_value = field_data['description']
-                                if memory_value and memory_value.strip():
-                                    self.device_info['total_memory'] = memory_value.strip()
-                                    print(f"    Found memory in {field_name}: {memory_value}")
-                                    break
-                    if self.device_info.get('total_memory', 'N/A') != 'N/A':
-                        break
-                
-                if self.device_info.get('total_memory', 'N/A') == 'N/A':
-                    print(f"    Memory entries found: {list(memory_data.get('entries', {}).keys())}")
-            else:
-                self.device_info['total_memory'] = 'N/A'
-                print("    Memory data not available")
+            self._get_memory_info_improved()
             
             # CPU information
             print("  Getting CPU information...")
@@ -865,39 +446,9 @@ class BigIPInfoExtractor:
                 self.device_info['cpu_count'] = 'N/A'
                 print("    CPU data not available")
             
-            # HA status
+            # HA status - improved
             print("  Getting HA status...")
-            try:
-                failover_data = self.api_request("sys/failover")
-                if failover_data:
-                    if 'status' in failover_data:
-                        self.device_info['ha_status'] = failover_data['status']
-                        print(f"    Found HA status: {failover_data['status']}")
-                    elif 'entries' in failover_data:
-                        # Look through entries for status information
-                        for entry_name, entry_data in failover_data['entries'].items():
-                            nested_stats = entry_data.get('nestedStats', {})
-                            entries = nested_stats.get('entries', {})
-                            
-                            for field_name, field_data in entries.items():
-                                if 'status' in field_name.lower() or 'state' in field_name.lower():
-                                    if isinstance(field_data, dict) and 'description' in field_data:
-                                        status_value = field_data['description']
-                                        if status_value and status_value.strip():
-                                            self.device_info['ha_status'] = status_value.strip()
-                                            print(f"    Found HA status in {field_name}: {status_value}")
-                                            break
-                            if self.device_info.get('ha_status', 'N/A') != 'N/A':
-                                break
-                    else:
-                        print(f"    Failover data structure: {list(failover_data.keys())}")
-                        self.device_info['ha_status'] = 'Unknown'
-                else:
-                    self.device_info['ha_status'] = 'Standalone'
-                    print("    No failover data - assuming Standalone")
-            except:
-                self.device_info['ha_status'] = 'Standalone'
-                print("    Failover API not available - assuming Standalone")
+            self._get_ha_status_improved()
             
             # Management IP
             self.device_info['management_ip'] = self.host
@@ -907,10 +458,234 @@ class BigIPInfoExtractor:
             self.device_info.update({
                 'system_time': 'N/A',
                 'total_memory': 'N/A',
+                'memory_used': 'N/A',
+                'tmm_memory': 'N/A',
                 'cpu_count': 'N/A',
                 'ha_status': 'N/A',
                 'management_ip': self.host
             })
+    
+    def _get_system_time_improved(self):
+        """Improved system time extraction with multiple methods"""
+        self.device_info['system_time'] = 'N/A'
+        
+        # Method 1: Try sys/clock for various time fields
+        clock_data = self.api_request("sys/clock")
+        if clock_data:
+            time_fields = ['fullDate', 'date', 'time', 'dateTime']
+            for field in time_fields:
+                if field in clock_data and clock_data[field]:
+                    raw_time = clock_data[field]
+                    formatted_time = self._format_system_time(raw_time)
+                    if formatted_time != 'N/A':
+                        self.device_info['system_time'] = formatted_time
+                        print(f"    Found system time: {formatted_time}")
+                        return
+        
+        # Method 2: Try getting from sys/global-settings
+        try:
+            global_data = self.api_request("sys/global-settings")
+            if global_data and 'consoleInactivityTimeout' in global_data:
+                # Device is responding, use current timestamp as fallback
+                from datetime import datetime
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                self.device_info['system_time'] = f"Local: {current_time}"
+                print(f"    Using local timestamp: {current_time}")
+                return
+        except:
+            pass
+        
+        print("    Could not determine system time")
+    
+    def _get_memory_info_improved(self):
+        """Improved memory information extraction with better fallbacks"""
+        # Initialize memory fields
+        self.device_info.update({
+            'total_memory': 'N/A',
+            'memory_used': 'N/A', 
+            'tmm_memory': 'N/A'
+        })
+        
+        # Method 1: Try sys/memory endpoints
+        memory_data = self.api_request("sys/memory")
+        if memory_data and 'entries' in memory_data:
+            memory_urls = list(memory_data['entries'].keys())
+            print(f"    Found memory URLs: {len(memory_urls)} endpoints")
+            
+            # Process each memory endpoint
+            for memory_url in memory_urls:
+                if memory_url.startswith('https://') and '/mgmt/tm/' in memory_url:
+                    endpoint = memory_url.split('/mgmt/tm/')[-1]
+                    print(f"    Calling memory endpoint: {endpoint}")
+                    
+                    mem_detail = self.api_request(endpoint)
+                    if mem_detail:
+                        # Process based on memory type
+                        if 'memory-host' in memory_url:
+                            self._extract_host_memory_improved(mem_detail)
+                        elif 'memory-tmm' in memory_url:
+                            self._extract_tmm_memory_improved(mem_detail)
+        
+        # Method 2: Try sys/hostinfo as fallback
+        if self.device_info['total_memory'] == 'N/A':
+            print("    Trying sys/hostinfo for memory...")
+            hostinfo_data = self.api_request("sys/hostinfo")
+            if hostinfo_data and 'entries' in hostinfo_data:
+                for entry_name, entry_data in hostinfo_data['entries'].items():
+                    nested_stats = entry_data.get('nestedStats', {})
+                    entries = nested_stats.get('entries', {})
+                    
+                    for field_name, field_data in entries.items():
+                        if isinstance(field_data, dict) and 'memory' in field_name.lower():
+                            value = field_data.get('description') or field_data.get('value')
+                            if value:
+                                if 'total' in field_name.lower():
+                                    self.device_info['total_memory'] = self._format_memory_value(value)
+                                    print(f"    Found total memory from hostinfo: {value}")
+        
+        print(f"    Memory Summary: Total={self.device_info.get('total_memory', 'N/A')}, Used={self.device_info.get('memory_used', 'N/A')}, TMM={self.device_info.get('tmm_memory', 'N/A')}")
+    
+    def _extract_host_memory_improved(self, host_mem_data):
+        """Improved host memory extraction"""
+        if not host_mem_data or 'entries' not in host_mem_data:
+            return
+        
+        print("          Extracting host memory...")
+        
+        for entry_name, entry_data in host_mem_data['entries'].items():
+            nested_stats = entry_data.get('nestedStats', {})
+            entries = nested_stats.get('entries', {})
+            
+            for field_name, field_data in entries.items():
+                if isinstance(field_data, dict):
+                    value = field_data.get('value') or field_data.get('description')
+                    
+                    if value:
+                        field_lower = field_name.lower()
+                        if 'totalmemory' in field_lower or (field_lower == 'memory' and 'total' not in self.device_info['total_memory']):
+                            formatted_mem = self._format_memory_value(value)
+                            self.device_info['total_memory'] = formatted_mem
+                            print(f"            Found total memory: {field_name} = {value} -> {formatted_mem}")
+                        elif 'usedmemory' in field_lower or 'used' in field_lower:
+                            formatted_mem = self._format_memory_value(value)
+                            self.device_info['memory_used'] = formatted_mem
+                            print(f"            Found used memory: {field_name} = {value} -> {formatted_mem}")
+    
+    def _extract_tmm_memory_improved(self, tmm_mem_data):
+        """Improved TMM memory extraction"""
+        if not tmm_mem_data or 'entries' not in tmm_mem_data:
+            return
+        
+        print("          Extracting TMM memory...")
+        
+        for entry_name, entry_data in tmm_mem_data['entries'].items():
+            nested_stats = entry_data.get('nestedStats', {})
+            entries = nested_stats.get('entries', {})
+            
+            for field_name, field_data in entries.items():
+                if isinstance(field_data, dict):
+                    value = field_data.get('value') or field_data.get('description')
+                    
+                    if value and ('total' in field_name.lower() or 'memory' in field_name.lower()):
+                        formatted_mem = self._format_memory_value(value)
+                        self.device_info['tmm_memory'] = formatted_mem
+                        print(f"            Found TMM memory: {field_name} = {value} -> {formatted_mem}")
+                        break
+    
+    def _get_ha_status_improved(self):
+        """Improved HA status detection with multiple methods"""
+        self.device_info['ha_status'] = 'N/A'
+        
+        # Method 1: Try sys/failover
+        try:
+            failover_data = self.api_request("sys/failover")
+            if failover_data:
+                if 'status' in failover_data:
+                    self.device_info['ha_status'] = failover_data['status']
+                    print(f"    Found HA status: {failover_data['status']}")
+                    return
+                elif 'entries' in failover_data:
+                    for entry_name, entry_data in failover_data['entries'].items():
+                        nested_stats = entry_data.get('nestedStats', {})
+                        entries = nested_stats.get('entries', {})
+                        
+                        for field_name, field_data in entries.items():
+                            if 'status' in field_name.lower() and isinstance(field_data, dict):
+                                status_value = field_data.get('description') or field_data.get('value')
+                                if status_value:
+                                    self.device_info['ha_status'] = status_value
+                                    print(f"    Found HA status in entries: {status_value}")
+                                    return
+        except:
+            pass
+        
+        # Method 2: Try cm/device to check for clustering
+        try:
+            device_data = self.api_request("cm/device")
+            if device_data and 'items' in device_data:
+                device_count = len(device_data['items'])
+                if device_count > 1:
+                    self.device_info['ha_status'] = f'Clustered ({device_count} devices)'
+                    print(f"    Found clustering: {device_count} devices")
+                    return
+                else:
+                    self.device_info['ha_status'] = 'Standalone'
+                    print(f"    Single device detected: Standalone")
+                    return
+        except:
+            pass
+        
+        # Method 3: Default to Standalone
+        self.device_info['ha_status'] = 'Standalone'
+        print(f"    Using default: Standalone")
+    
+    def _format_memory_value(self, memory_value):
+        """Convert memory value to a readable format"""
+        if not memory_value or memory_value == 'N/A':
+            return 'N/A'
+        
+        try:
+            # Convert to string and clean up
+            mem_str = str(memory_value).strip()
+            
+            # If it's already a number in bytes, convert to GB
+            if mem_str.isdigit():
+                bytes_value = int(mem_str)
+                gb_value = bytes_value / (1024 * 1024 * 1024)
+                if gb_value >= 1:
+                    return f"{gb_value:.1f}GB"
+                else:
+                    mb_value = bytes_value / (1024 * 1024)
+                    return f"{mb_value:.1f}MB"
+            
+            # If it already has units, return as-is
+            if any(unit in mem_str.upper() for unit in ['GB', 'MB', 'KB', 'TB']):
+                return mem_str
+            
+            # Try to extract numeric value and convert
+            import re
+            numeric_match = re.search(r'(\d+(?:\.\d+)?)', mem_str)
+            if numeric_match:
+                numeric_value = float(numeric_match.group(1))
+                
+                # Assume it's in bytes if it's a large number
+                if numeric_value > 1000000:  # Likely bytes
+                    gb_value = numeric_value / (1024 * 1024 * 1024)
+                    if gb_value >= 1:
+                        return f"{gb_value:.1f}GB"
+                    else:
+                        mb_value = numeric_value / (1024 * 1024)
+                        return f"{mb_value:.1f}MB"
+                else:
+                    # Might already be in MB or GB
+                    return mem_str
+            
+            # If we can't parse it, return original
+            return mem_str
+            
+        except Exception as e:
+            print(f"      Error formatting memory value '{memory_value}': {str(e)}")
+            return str(memory_value)
     
     def _format_system_time(self, time_string):
         """Convert system time to standard format in local timezone (YYYY-MM-DD HH:MM:SS)"""
@@ -919,7 +694,6 @@ class BigIPInfoExtractor:
         
         try:
             from datetime import datetime, timezone
-            import time
             
             # Common BIG-IP time formats to try
             time_formats = [
@@ -928,11 +702,6 @@ class BigIPInfoExtractor:
                 ('%Y-%m-%d %H:%M:%S', False),         # 2025-07-14 15:30:45 (assume local)
                 ('%a %b %d %H:%M:%S %Z %Y', True),    # Wed Jul 14 15:30:45 UTC 2025
                 ('%a %b %d %H:%M:%S %Y', False),      # Wed Jul 14 15:30:45 2025 (assume local)
-                ('%m/%d/%Y %H:%M:%S', False),         # 07/14/2025 15:30:45 (assume local)
-                ('%b %d %Y %H:%M:%S', False),         # Jul 14 2025 15:30:45 (assume local)
-                ('%d %b %Y %H:%M:%S', False),         # 14 Jul 2025 15:30:45 (assume local)
-                ('%Y-%m-%dT%H:%M:%S.%fZ', True),      # 2025-07-15T03:28:35.123456Z (with microseconds)
-                ('%Y-%m-%dT%H:%M:%S.%f', False),      # 2025-07-15T03:28:35.123456 (assume local)
             ]
             
             time_string = time_string.strip()
@@ -957,65 +726,7 @@ class BigIPInfoExtractor:
                 except ValueError:
                     continue
             
-            # If no format matches, try to extract basic components with regex
-            import re
-            
-            # Pattern for ISO 8601 format variations (assume UTC if Z suffix)
-            iso_pattern = r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z?)'
-            iso_match = re.search(iso_pattern, time_string)
-            
-            if iso_match:
-                year, month, day, hour, minute, second, microsecond, z_suffix = iso_match.groups()
-                dt = datetime(int(year), int(month), int(day), 
-                            int(hour), int(minute), int(second))
-                
-                if z_suffix == 'Z':
-                    # UTC time, convert to local
-                    dt = dt.replace(tzinfo=timezone.utc)
-                    local_dt = dt.astimezone()
-                    formatted_time = local_dt.strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"    Converted UTC time via regex: {time_string} -> {formatted_time} (local)")
-                else:
-                    # Assume local time
-                    formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"    Converted local time via regex: {time_string} -> {formatted_time}")
-                
-                return formatted_time
-            
-            # Pattern for common date/time components with timezone detection
-            # Try to extract: Jul 14 15:30:45 UTC 2025 or similar
-            pattern = r'(\w{3})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s+(?:(\w+)\s+)?(\d{4})'
-            match = re.search(pattern, time_string)
-            
-            if match:
-                month_name, day, hour, minute, second, tz_name, year = match.groups()
-                
-                # Convert month name to number
-                months = {
-                    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-                    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
-                }
-                
-                month_num = months.get(month_name.lower(), 1)
-                
-                # Create datetime object
-                dt = datetime(int(year), month_num, int(day), 
-                            int(hour), int(minute), int(second))
-                
-                # Check if timezone is UTC
-                if tz_name and tz_name.upper() in ['UTC', 'GMT']:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                    local_dt = dt.astimezone()
-                    formatted_time = local_dt.strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"    Converted UTC time via month regex: {time_string} -> {formatted_time} (local)")
-                else:
-                    formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"    Converted local time via month regex: {time_string} -> {formatted_time}")
-                
-                return formatted_time
-            
             # If all else fails, return the original string
-            print(f"    Warning: Could not parse time format: {time_string}")
             return time_string
             
         except Exception as e:
@@ -1049,124 +760,6 @@ class BigIPInfoExtractor:
         self.device_info['extraction_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         return True
-    
-    def debug_serial_search(self):
-        """Comprehensive debug search for serial number"""
-        print("\n=== SERIAL NUMBER DEBUG MODE ===")
-        target_serial = "dfac18d2-466d-fc43-5cb74c9d3b49"
-        print(f"Target serial: {target_serial}")
-        
-        # List of endpoints that might contain serial information
-        serial_endpoints = [
-            "sys/hardware",
-            "sys/version", 
-            "sys/host-info",
-            "sys/license",
-            "sys/provision",
-            "sys/fpga",
-            "sys/db",
-            "sys/global-settings"
-        ]
-        
-        for endpoint in serial_endpoints:
-            print(f"\n--- Checking {endpoint} ---")
-            data = self.api_request(endpoint)
-            
-            if not data:
-                print("  No data returned")
-                continue
-            
-            # First, check if target serial is anywhere in the response
-            data_str = str(data)
-            if target_serial in data_str:
-                print(f"  *** TARGET SERIAL FOUND IN {endpoint}! ***")
-                print(f"  Full response: {data}")
-                return
-            
-            # Check for selfLinks in items
-            if 'items' in data and isinstance(data['items'], list):
-                print(f"  Found {len(data['items'])} items with potential selfLinks")
-                for i, item in enumerate(data['items'][:5]):  # Check first 5 items
-                    if 'selfLink' in item:
-                        print(f"    Item {i} selfLink: {item['selfLink']}")
-                        selflink_data = self.api_request_selflink(item['selfLink'])
-                        if selflink_data:
-                            selflink_str = str(selflink_data)
-                            if target_serial in selflink_str:
-                                print(f"    *** TARGET SERIAL FOUND VIA SELFLINK! ***")
-                                print(f"    SelfLink response: {selflink_data}")
-                                return
-            
-            # Check for selfLinks in entries
-            if 'entries' in data:
-                print(f"  Found entries: {list(data['entries'].keys())}")
-                for entry_name, entry_data in data['entries'].items():
-                    if entry_name.startswith('https://'):
-                        print(f"    Entry selfLink: {entry_name}")
-                        selflink_data = self.api_request_selflink(entry_name)
-                        if selflink_data:
-                            selflink_str = str(selflink_data)
-                            if target_serial in selflink_str:
-                                print(f"    *** TARGET SERIAL FOUND VIA ENTRY SELFLINK! ***")
-                                print(f"    Entry response: {selflink_data}")
-                                return
-                    
-                    # Check nested entries for more selfLinks
-                    if isinstance(entry_data, dict) and 'nestedStats' in entry_data:
-                        nested_stats = entry_data['nestedStats']
-                        if 'entries' in nested_stats:
-                            nested_entries = nested_stats['entries']
-                            for nested_key, nested_value in nested_entries.items():
-                                if nested_key.startswith('https://'):
-                                    print(f"      Nested selfLink: {nested_key}")
-                                    selflink_data = self.api_request_selflink(nested_key)
-                                    if selflink_data:
-                                        selflink_str = str(selflink_data)
-                                        if target_serial in selflink_str:
-                                            print(f"      *** TARGET SERIAL FOUND VIA NESTED SELFLINK! ***")
-                                            print(f"      Nested response: {selflink_data}")
-                                            return
-                                elif isinstance(nested_value, dict) and 'description' in nested_value:
-                                    desc = nested_value['description']
-                                    if target_serial in str(desc):
-                                        print(f"      *** TARGET SERIAL FOUND IN DESCRIPTION! ***")
-                                        print(f"      Field: {nested_key}, Value: {desc}")
-                                        return
-        
-        print(f"\n*** TARGET SERIAL {target_serial} NOT FOUND IN ANY LOCATION ***")
-        print("\n=== END SERIAL DEBUG ===\n")
-    
-    def debug_api_structure(self):
-        """Debug method to explore API structure"""
-        print("\n=== DEBUG: Exploring API Structure ===")
-        
-        # Test various endpoints to see what's available
-        endpoints_to_test = [
-            "sys/hardware",
-            "sys/version", 
-            "sys/software/image",
-            "sys/chassis",
-            "sys/db/tmos.version"
-        ]
-        
-        for endpoint in endpoints_to_test:
-            print(f"\n--- Testing {endpoint} ---")
-            data = self.api_request(endpoint)
-            if data:
-                if isinstance(data, dict):
-                    print(f"Top-level keys: {list(data.keys())}")
-                    if 'entries' in data:
-                        print(f"Entries: {list(data['entries'].keys())}")
-                    if 'items' in data:
-                        print(f"Items count: {len(data['items'])}")
-                        if data['items']:
-                            print(f"First item keys: {list(data['items'][0].keys())}")
-                else:
-                    print(f"Data type: {type(data)}")
-            else:
-                print("No data returned")
-        
-        print("\n=== End Debug ===\n")
 
 def write_to_csv(devices_info, filename='bigip_device_info.csv'):
     """Write device information to CSV file"""
@@ -1187,6 +780,8 @@ def write_to_csv(devices_info, filename='bigip_device_info.csv'):
         'emergency_hotfixes',
         'system_time',
         'total_memory',
+        'memory_used',
+        'tmm_memory',
         'cpu_count',
         'ha_status',
         'extraction_timestamp'
@@ -1209,11 +804,6 @@ def write_to_csv(devices_info, filename='bigip_device_info.csv'):
 
 def get_credentials_for_device(args, device_user=None, device_pass=None):
     """Get credentials for a specific device with fallback logic"""
-    # Priority order:
-    # 1. Credentials from CSV file (if provided and not empty)
-    # 2. Command line arguments (if provided)
-    # 3. Interactive prompt (if both above are empty/missing)
-    
     username = None
     password = None
     
@@ -1459,35 +1049,6 @@ Examples:
     else:
         # Interactive mode
         devices_info = process_devices_interactively(args)
-    
-    # Offer debug options only if no devices were processed successfully
-    if not devices_info:
-        debug_choice = input("No devices extracted successfully. Run debug mode to explore API structure? (y/n): ").strip().lower()
-        if debug_choice in ['y', 'yes']:
-            if args.input_file:
-                # For file mode, ask which device to debug
-                host = input("Enter BIG-IP device IP/hostname for debug: ").strip()
-                username, password = get_credentials_for_device(args)
-            else:
-                host = input("Enter BIG-IP device IP/hostname for debug: ").strip()
-                username, password = get_credentials_for_device(args)
-            
-            extractor = BigIPInfoExtractor(host, username, password)
-            if extractor.connect():
-                extractor.debug_api_structure()
-    else:
-        # If we have devices but missing serial numbers, offer serial debug
-        missing_serials = [info for info in devices_info if info.get('serial_number') == 'N/A']
-        if missing_serials:
-            print(f"\nFound {len(missing_serials)} device(s) with missing serial numbers.")
-            serial_debug = input("Run serial number debug mode? (y/n): ").strip().lower()
-            if serial_debug in ['y', 'yes']:
-                host = input("Enter BIG-IP device IP/hostname for serial debug: ").strip()
-                username, password = get_credentials_for_device(args)
-                
-                extractor = BigIPInfoExtractor(host, username, password)
-                if extractor.connect():
-                    extractor.debug_serial_search()
     
     # Write results to CSV
     if devices_info:
