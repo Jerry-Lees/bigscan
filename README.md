@@ -19,7 +19,7 @@ A comprehensive Python script for extracting detailed system information from F5
 | File | Description | Purpose |
 |------|-------------|---------|
 | `bigscan.py` | Main scanner script | Extracts device information from BIG-IP devices |
-| `install_test.sh` | Installation and test script | Sets up dependencies and validates installation |
+| `install.sh` | Installation and test script | Sets up dependencies and validates installation |
 | `README.md` | Documentation | This file - complete usage guide |
 
 ### Generated Files (Created by Scripts)
@@ -27,9 +27,9 @@ A comprehensive Python script for extracting detailed system information from F5
 | File | Description | Created By |
 |------|-------------|------------|
 | `bigip_device_info.csv` | Default output file | `bigscan.py` (default output) |
-| `test_devices.csv` | Sample input CSV template | `install_test.sh` |
-| `test_scanner.py` | Automated test suite | `install_test.sh` |
-| `bigip_scanner_env/` | Python virtual environment | `install_test.sh` |
+| `test_devices.csv` | Sample input CSV template | `install.sh` |
+| `test_scanner.py` | Automated test suite | `install.sh` |
+| `bigip_scanner_env/` | Python virtual environment | `install.sh` |
 
 ## Installation
 
@@ -37,10 +37,10 @@ A comprehensive Python script for extracting detailed system information from F5
 
 ```bash
 # Make the installer executable
-chmod +x install_test.sh
+chmod +x install.sh
 
 # Run full installation and testing
-./install_test.sh
+./install.sh
 ```
 
 ### Manual Installation
@@ -103,7 +103,7 @@ python bigscan.py --in devices.csv --user admin --out audit_results.csv
 
 **Security Note**: Using `--pass` in command line is not recommended as passwords may be visible in process lists and command history.
 
-### Installation Script (`install_test.sh`)
+### Installation Script (`install.sh`)
 
 | Option | Description |
 |--------|-------------|
@@ -215,7 +215,7 @@ python bigscan.py --user admin
 #### Missing Dependencies
 ```bash
 # Reinstall dependencies
-./install_test.sh --python-only
+./install.sh --python-only
 ```
 
 #### API Connection Issues
@@ -239,7 +239,7 @@ The script includes built-in debugging capabilities:
 |-------|--------|----------|
 | `401 Unauthorized` | Invalid credentials | Check username/password |
 | `Connection refused` | Network/firewall issue | Verify IP and network connectivity |
-| `Module not found` | Missing dependencies | Run `./install_test.sh` |
+| `Module not found` | Missing dependencies | Run `./install.sh` |
 | `File not found` | Missing input CSV | Check file path and permissions |
 
 ## System Requirements
@@ -290,13 +290,13 @@ The script includes built-in debugging capabilities:
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run tests: `./install_test.sh --test-only`
+4. Run tests: `./install.sh --test-only`
 5. Submit a pull request
 
 ### Testing
 ```bash
 # Run all tests
-./install_test.sh --test-only
+./install.sh --test-only
 
 # Manual testing
 python test_scanner.py
