@@ -2,7 +2,7 @@
 
 A comprehensive Python script for extracting detailed system information from F5 BIG-IP devices via REST API. This tool connects to BIG-IP devices and extracts hardware, software, licensing, and configuration information, exporting the data to CSV format for analysis and reporting.
 
-## Enhanced Features
+## Features
 
 - **Comprehensive Data Extraction**: Hostname, serial number, registration key, software version, hotfixes, platform info, and more
 - **Enhanced QKView Generation**: Creates and downloads QKView diagnostic files using F5's official autodeploy endpoint
@@ -13,6 +13,14 @@ A comprehensive Python script for extracting detailed system information from F5
 - **CSV Export**: Structured output for easy analysis and reporting
 - **Automatic Cleanup**: Removes temporary files and tasks from BIG-IP devices after processing
 - **Cross-Platform**: Works on Linux, macOS, and Windows
+
+## License
+
+This project is provided as-is for educational and administrative purposes. Please ensure compliance with your organization's security policies when using this tool.
+
+## Disclaimer
+
+This script is designed to assist in information gathering from F5 BIG-IP devices and has been tested in various environments. However, it may not work properly in all use cases or configurations. The script is provided "as is" without any warranty of merchantability, fitness for a particular purpose, or guarantee of functionality. Users should thoroughly test the script in a non-production environment to ensure proper operation within their specific environment before deploying in production systems. The authors and contributors assume no responsibility for any issues, damages, or operational impacts that may result from the use of this script.
 
 ## Getting Started
 
@@ -198,6 +206,8 @@ bigip-lab.example.com,admin,
 - **Password** (optional): Third column, leave empty to use command line `--pass` or prompt
 - **Headers**: Optional, script auto-detects headers
 - **Empty rows**: Automatically skipped
+
+**Security Note**: Including passwords in CSV files is not recommended for security reasons, though it may be necessary for automation or convenience. If you do store passwords in CSV files, ensure they are properly secured with restrictive file permissions (e.g., `chmod 600 devices.csv`), stored in secure locations, and access is limited to authorized personnel only.
 
 ### Credential Priority
 
@@ -463,10 +473,6 @@ The script is modular and can be extended:
 - **Rate Limiting**: Built-in delays prevent API overload
 - **Error Handling**: Continues processing remaining devices on individual failures
 - **Progress Tracking**: Real-time progress indicators for long operations
-
-## License
-
-This project is provided as-is for educational and administrative purposes. Please ensure compliance with your organization's security policies and F5's terms of service when using this tool.
 
 ## Support
 
