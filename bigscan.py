@@ -6,11 +6,18 @@ This script connects to F5 BIG-IP devices and extracts comprehensive system info
 including hostname, serial number, registration key, software version, hotfixes, and more.
 The data is exported to a CSV file for easy analysis.
 
+Enhanced QKView Feature:
+- Uses F5's official autodeploy endpoint for reliable QKView generation
+- Proper asynchronous task monitoring
+- Downloads QKViews to local 'qkviews' directory
+- Automatic cleanup of remote files after download
+- Enhanced error handling and progress reporting
+
 Requirements:
     pip install requests urllib3
 
 Usage:
-    python bigscan.py [--user USERNAME] [--pass PASSWORD] [--out FILENAME] [--in INPUT_CSV] [--help]
+    python bigscan.py [--user USERNAME] [--pass PASSWORD] [--out FILENAME] [--in INPUT_CSV] [--qkview] [--help]
     
 Examples:
     python bigscan.py                                              # Interactive mode
@@ -20,6 +27,8 @@ Examples:
     python bigscan.py -u admin -p mypass -o device_report.csv      # Short form options
     python bigscan.py --in devices.csv --out results.csv           # Bulk processing from CSV
     python bigscan.py --in devices.csv --user admin                # CSV with fallback credentials
+    python bigscan.py --in devices.csv --qkview --out results.csv  # Include QKView creation
+    python bigscan.py -q --qkview-timeout 1200 --in devices.csv    # QKView with 20min timeout
 """
 
 import csv
@@ -27,6 +36,8 @@ import json
 import sys
 import getpass
 import argparse
+import os
+import time
 from datetime import datetime
 import requests
 import urllib3
@@ -35,7 +46,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class BigIPInfoExtractor:
-    def __init__(self, host, username, password):
+    def __init__(self, host, username, password, create_qkview=False, qkview_timeout=1200):
         """Initialize connection to BIG-IP device"""
         self.host = host
         self.username = username
@@ -45,6 +56,9 @@ class BigIPInfoExtractor:
         self.session.verify = False
         self.base_url = f"https://{self.host}"
         self.device_info = {}
+        self.create_qkview = create_qkview
+        self.qkview_timeout = qkview_timeout
+        self.token_timeout = 1200  # 20 minutes default token timeout
         
     def get_auth_token(self):
         """Get authentication token from BIG-IP"""
@@ -75,6 +89,8 @@ class BigIPInfoExtractor:
                         'Content-Type': 'application/json'
                     })
                     print("Authentication token obtained successfully!")
+                    # Extend token timeout for long operations
+                    self._extend_token_timeout()
                     return True
                 else:
                     print("Failed to obtain authentication token from response")
@@ -86,6 +102,40 @@ class BigIPInfoExtractor:
         except Exception as e:
             print(f"Error getting authentication token: {str(e)}")
             return False
+    
+    def _extend_token_timeout(self):
+        """Extend the authentication token timeout"""
+        try:
+            if not self.token:
+                return
+            
+            extend_url = f"{self.base_url}/mgmt/shared/authz/tokens/{self.token}"
+            extend_payload = {
+                "timeout": self.token_timeout
+            }
+            
+            response = self.session.patch(extend_url, json=extend_payload, timeout=30)
+            response.raise_for_status()
+            
+        except Exception as e:
+            print(f"Warning: Could not extend token timeout for {self.host}: {str(e)}")
+    
+    def logout(self):
+        """Logout and invalidate the authentication token"""
+        try:
+            if not self.token:
+                return
+            
+            logout_url = f"{self.base_url}/mgmt/shared/authz/tokens/{self.token}"
+            self.session.delete(logout_url, timeout=30)
+            
+            # Clean up session
+            self.token = None
+            if 'X-F5-Auth-Token' in self.session.headers:
+                del self.session.headers['X-F5-Auth-Token']
+            
+        except Exception as e:
+            print(f"Warning: Could not logout cleanly from {self.host}: {str(e)}")
     
     def api_request(self, endpoint):
         """Make authenticated API request"""
@@ -123,6 +173,294 @@ class BigIPInfoExtractor:
     def connect(self):
         """Establish connection to BIG-IP device"""
         return self.get_auth_token()
+    
+    def create_and_download_qkview(self):
+        """Create QKView on remote device and download it using enhanced F5 autodeploy endpoint"""
+        try:
+            print("  Creating QKView using F5 autodeploy endpoint...")
+            print(f"  QKView timeout configured for: {self.qkview_timeout} seconds ({self.qkview_timeout/60:.1f} minutes)")
+            
+            # Step 1: Create QKView task
+            task_id = self._create_qkview_task()
+            if not task_id:
+                print("  ✗ Failed to create QKView task")
+                return False
+            
+            # Step 2: Wait for QKView to complete
+            qkview_info = self._wait_for_qkview_completion(task_id)
+            if not qkview_info:
+                print("  ✗ QKView creation timed out or failed")
+                return False
+            
+            # Step 3: Download QKView
+            if self._download_qkview(qkview_info):
+                print(f"  ✓ QKView downloaded successfully")
+                # Step 4: Cleanup remote task
+                self._cleanup_qkview_task(task_id)
+                return True
+            else:
+                print("  ✗ Failed to download QKView")
+                # Still try to cleanup
+                self._cleanup_qkview_task(task_id)
+                return False
+                
+        except Exception as e:
+            print(f"  ✗ Error creating/downloading QKView: {str(e)}")
+            import traceback
+            print(f"  Traceback: {traceback.format_exc()}")
+            return False
+    
+    def _create_qkview_task(self):
+        """Create QKView task using F5 autodeploy endpoint"""
+        try:
+            # Generate a unique QKView name with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            hostname = self.device_info.get('hostname', self.host).replace('.', '_')
+            qkview_name = f"{hostname}_{timestamp}.qkview"
+            
+            # Use the F5 autodeploy endpoint
+            qkview_url = f"{self.base_url}/mgmt/cm/autodeploy/qkview"
+            
+            # Payload according to F5 documentation
+            qkview_payload = {"name": qkview_name}
+            
+            print(f"    Creating QKView task: {qkview_name}")
+            print(f"    QKView endpoint: {qkview_url}")
+            print(f"    QKView payload: {json.dumps(qkview_payload, indent=2)}")
+            
+            # Submit QKView creation request (asynchronous)
+            start_time = time.time()
+            try:
+                response = self.session.post(
+                    qkview_url,
+                    json=qkview_payload,
+                    timeout=30  # Quick timeout for task creation
+                )
+                elapsed = time.time() - start_time
+                print(f"    QKView task creation completed in {elapsed:.2f} seconds")
+                
+            except requests.exceptions.Timeout:
+                elapsed = time.time() - start_time
+                print(f"    ✗ QKView task creation TIMED OUT after {elapsed:.2f} seconds")
+                return None
+            except Exception as e:
+                elapsed = time.time() - start_time
+                print(f"    ✗ QKView task creation failed after {elapsed:.2f} seconds: {str(e)}")
+                return None
+            
+            print(f"    QKView task creation response status: {response.status_code}")
+            
+            if response.status_code in [200, 202]:
+                try:
+                    response_data = response.json()
+                    print(f"    QKView task creation response: {json.dumps(response_data, indent=2)}")
+                except:
+                    print(f"    QKView task creation response (raw): {response.text}")
+                    response_data = {}
+                
+                # Extract the task ID from the response
+                task_id = response_data.get('id')
+                if task_id:
+                    print(f"    QKView task created with ID: {task_id}")
+                    return task_id
+                else:
+                    print(f"    No task ID found in response")
+                    return None
+                    
+            else:
+                print(f"    ✗ Failed to create QKView task: {response.status_code}")
+                try:
+                    error_data = response.json()
+                    print(f"    Error response: {json.dumps(error_data, indent=2)}")
+                except:
+                    print(f"    Error response (raw): {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"    ✗ Error creating QKView task: {str(e)}")
+            import traceback
+            print(f"    Traceback: {traceback.format_exc()}")
+            return None
+    
+    def _wait_for_qkview_completion(self, task_id):
+        """Wait for QKView task completion using F5 autodeploy endpoint"""
+        try:
+            print(f"    Waiting for QKView task completion...")
+            print(f"    Monitoring task ID: {task_id}")
+            print(f"    Maximum wait time: {self.qkview_timeout} seconds ({self.qkview_timeout/60:.1f} minutes)")
+            
+            status_url = f"{self.base_url}/mgmt/cm/autodeploy/qkview/{task_id}"
+            start_time = time.time()
+            check_interval = 15  # Check every 15 seconds
+            last_status = None
+            check_count = 0
+            
+            while (time.time() - start_time) < self.qkview_timeout:
+                check_count += 1
+                elapsed = int(time.time() - start_time)
+                
+                print(f"    [{elapsed}s] Status check #{check_count} for task {task_id}")
+                
+                try:
+                    response = self.session.get(status_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    result = response.json()
+                    status = result.get('status', 'Unknown')
+                    generation = result.get('generation', 'N/A')
+                    
+                    print(f"    Task Status: {status}, Generation: {generation}")
+                    
+                    if status == 'SUCCEEDED':
+                        print(f"    ✓ QKView generation completed successfully (after {elapsed}s)")
+                        qkview_uri = result.get('qkviewUri')
+                        if qkview_uri:
+                            print(f"    QKView download URI: {qkview_uri}")
+                        return result
+                    
+                    elif status == 'FAILED':
+                        print(f"    ✗ QKView generation failed (after {elapsed}s)")
+                        print(f"    Full response: {result}")
+                        return None
+                    
+                    elif status == 'IN_PROGRESS':
+                        if status != last_status:
+                            print(f"    QKView generation in progress...")
+                        last_status = status
+                    else:
+                        print(f"    Unknown task status: {status}")
+                        print(f"    Full response: {result}")
+                
+                except requests.exceptions.RequestException as e:
+                    print(f"    Error checking status (attempt {check_count}): {str(e)}")
+                    if check_count >= 3:
+                        print(f"    Multiple consecutive failures, aborting")
+                        return None
+                
+                print(f"    Waiting {check_interval} seconds before next check...")
+                time.sleep(check_interval)
+            
+            elapsed = int(time.time() - start_time)
+            print(f"    ✗ QKView creation TIMED OUT after {elapsed} seconds (limit: {self.qkview_timeout}s)")
+            return None
+            
+        except Exception as e:
+            elapsed = int(time.time() - start_time) if 'start_time' in locals() else 0
+            print(f"    ✗ Error waiting for QKView completion (after {elapsed}s): {str(e)}")
+            import traceback
+            print(f"    Traceback: {traceback.format_exc()}")
+            return None
+    
+    def _download_qkview(self, qkview_info):
+        """Download QKView file using F5 autodeploy download endpoint"""
+        try:
+            # Create local qkviews directory if it doesn't exist
+            local_dir = "qkviews"
+            if not os.path.exists(local_dir):
+                os.makedirs(local_dir)
+                print(f"    Created directory: {local_dir}")
+            
+            # Extract download information
+            qkview_uri = qkview_info.get('qkviewUri')
+            filename = qkview_info.get('name', f'{self.host}.qkview')
+            
+            if not qkview_uri:
+                print(f"    ✗ No download URI found in QKView info: {qkview_info}")
+                return False
+            
+            print(f"    Downloading QKView: {filename}")
+            print(f"    Original URI: {qkview_uri}")
+            
+            # Handle localhost replacement in URI
+            if 'localhost' in qkview_uri:
+                download_url = qkview_uri.replace('localhost', self.host)
+                print(f"    Corrected URL: {download_url}")
+            elif qkview_uri.startswith('https://'):
+                download_url = qkview_uri
+            else:
+                download_url = f"https://{self.host}{qkview_uri}"
+            
+            local_path = os.path.join(local_dir, filename)
+            
+            # Create download session with same authentication
+            download_session = requests.Session()
+            download_session.verify = False
+            
+            if self.token:
+                download_session.headers.update({
+                    'X-F5-Auth-Token': self.token
+                })
+            
+            print(f"    Download URL: {download_url}")
+            print(f"    Local path: {local_path}")
+            print(f"    Download timeout: {self.qkview_timeout} seconds")
+            
+            # Download the file with progress indication
+            start_time = time.time()
+            try:
+                response = download_session.get(
+                    download_url,
+                    timeout=self.qkview_timeout,
+                    stream=True
+                )
+                response.raise_for_status()
+                
+                # Get file size from headers if available
+                total_size = int(response.headers.get('content-length', 0))
+                if total_size > 0:
+                    print(f"    QKView file size: {total_size} bytes ({total_size / (1024*1024):.1f} MB)")
+                
+                # Save file locally with progress
+                downloaded = 0
+                with open(local_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            # Progress update every MB
+                            if total_size > 0 and downloaded % (1024*1024) == 0:
+                                progress = (downloaded / total_size) * 100
+                                print(f"      Download progress: {progress:.1f}% ({downloaded / (1024*1024):.1f} MB)")
+                
+                elapsed = time.time() - start_time
+                final_size = os.path.getsize(local_path)
+                print(f"    ✓ Downloaded: {filename} ({final_size} bytes) in {elapsed:.1f} seconds")
+                
+                # Verify file size if known
+                if total_size > 0 and final_size != total_size:
+                    print(f"    Warning: File size mismatch. Expected: {total_size}, Downloaded: {final_size}")
+                    return False
+                
+                return True
+                
+            except requests.exceptions.Timeout:
+                elapsed = time.time() - start_time
+                print(f"    ✗ Download TIMED OUT after {elapsed:.2f} seconds")
+                return False
+            except Exception as e:
+                elapsed = time.time() - start_time
+                print(f"    ✗ Download failed after {elapsed:.2f} seconds: {str(e)}")
+                return False
+                
+        except Exception as e:
+            print(f"    ✗ Error downloading QKView: {str(e)}")
+            import traceback
+            print(f"    Traceback: {traceback.format_exc()}")
+            return False
+    
+    def _cleanup_qkview_task(self, task_id):
+        """Clean up QKView task using F5 autodeploy endpoint"""
+        try:
+            cleanup_url = f"{self.base_url}/mgmt/cm/autodeploy/qkview/{task_id}"
+            
+            print(f"    Cleaning up QKView task: {task_id}")
+            response = self.session.delete(cleanup_url, timeout=30)
+            response.raise_for_status()
+            
+            print(f"    ✓ QKView task cleaned up successfully")
+            
+        except Exception as e:
+            print(f"    Warning: Failed to cleanup QKView task {task_id}: {str(e)}")
     
     def get_system_info(self):
         """Extract basic system information"""
@@ -559,140 +897,7 @@ class BigIPInfoExtractor:
                                         print(f"    Found memory in platform: {formatted_mem}")
                                         break
         
-        # Method 4: Try sys/version for memory info (sometimes has hardware details)
-        if self.device_info['total_memory'] == 'N/A':
-            print("    Trying sys/version for memory...")
-            version_info = self.api_request("sys/version")
-            if version_info and 'entries' in version_info:
-                for entry_name, entry_data in version_info['entries'].items():
-                    if 'nestedStats' in entry_data:
-                        nested_entries = entry_data['nestedStats'].get('entries', {})
-                        for field_name, field_data in nested_entries.items():
-                            field_lower = field_name.lower()
-                            if any(mem_word in field_lower for mem_word in ['memory', 'ram']) and isinstance(field_data, dict):
-                                value = field_data.get('description') or field_data.get('value')
-                                if value:
-                                    # sys/version might have memory info in description
-                                    value_str = str(value)
-                                    if any(unit in value_str.upper() for unit in ['GB', 'MB']) or 'memory' in value_str.lower():
-                                        formatted_mem = self._format_memory_value(value_str)
-                                        if formatted_mem != 'N/A' and self.device_info['total_memory'] == 'N/A':
-                                            self.device_info['total_memory'] = formatted_mem
-                                            print(f"    Found memory in version: {formatted_mem}")
-                                            break
-        
-        # Method 5: Try limited hardware search (avoid infinite loops)
-        if self.device_info['total_memory'] == 'N/A':
-            print("    Trying limited sys/hardware search...")
-            hardware_data = self.api_request("sys/hardware")
-            if hardware_data and 'entries' in hardware_data:
-                # Only search top-level and one level deep
-                for entry_name, entry_data in hardware_data['entries'].items():
-                    if 'nestedStats' in entry_data:
-                        nested_entries = entry_data['nestedStats'].get('entries', {})
-                        for field_name, field_data in nested_entries.items():
-                            if 'memory' in field_name.lower() and isinstance(field_data, dict):
-                                value = field_data.get('description') or field_data.get('value')
-                                if value:
-                                    formatted_mem = self._format_memory_value(value)
-                                    if formatted_mem != 'N/A' and self.device_info['total_memory'] == 'N/A':
-                                        self.device_info['total_memory'] = formatted_mem
-                                        print(f"    Found memory in hardware: {formatted_mem}")
-                                        break
-                    if self.device_info['total_memory'] != 'N/A':
-                        break
-        
         print(f"    Memory Results: Total={self.device_info['total_memory']}, Used={self.device_info['memory_used']}, TMM={self.device_info['tmm_memory']}")
-    
-    def _find_memory_in_hardware(self, data, visited=None):
-        """Search for memory information in hardware data with cycle detection"""
-        # This method is no longer used to avoid complexity
-        return None
-    
-    def _search_for_memory_value(self, data, visited=None):
-        """Search for any memory-related values in data structure"""
-        if visited is None:
-            visited = set()
-        
-        data_id = id(data)
-        if data_id in visited or len(visited) > 5:  # Much stricter limit
-            return None
-        visited.add(data_id)
-        
-        if isinstance(data, dict):
-            for key, value in data.items():
-                key_lower = key.lower()
-                if any(mem_word in key_lower for mem_word in ['memory', 'ram', 'mem']):
-                    if isinstance(value, (str, int, float)):
-                        value_str = str(value)
-                        # Check if it looks like memory data
-                        if any(unit in value_str.upper() for unit in ['GB', 'MB', 'KB']):
-                            formatted = self._format_memory_value(value_str)
-                            if formatted != 'N/A':
-                                visited.remove(data_id)
-                                return formatted
-                        elif value_str.replace('.', '').isdigit() and int(value_str.replace('.', '')) > 1000000:
-                            formatted = self._format_memory_value(value_str)
-                            if formatted != 'N/A':
-                                visited.remove(data_id)
-                                return formatted
-                
-                # Very limited recursion
-                if isinstance(value, dict) and len(visited) < 3:
-                    result = self._search_for_memory_value(value, visited)
-                    if result:
-                        visited.remove(data_id)
-                        return result
-        
-        visited.remove(data_id)
-        return None
-    
-    def _extract_host_memory_improved(self, host_mem_data):
-        """Improved host memory extraction"""
-        if not host_mem_data or 'entries' not in host_mem_data:
-            return
-        
-        print("          Extracting host memory...")
-        
-        for entry_name, entry_data in host_mem_data['entries'].items():
-            nested_stats = entry_data.get('nestedStats', {})
-            entries = nested_stats.get('entries', {})
-            
-            for field_name, field_data in entries.items():
-                if isinstance(field_data, dict):
-                    value = field_data.get('value') or field_data.get('description')
-                    
-                    if value:
-                        field_lower = field_name.lower()
-                        if 'totalmemory' in field_lower or (field_lower == 'memory' and 'total' not in self.device_info['total_memory']):
-                            formatted_mem = self._format_memory_value(value)
-                            self.device_info['total_memory'] = formatted_mem
-                            print(f"            Found total memory: {field_name} = {value} -> {formatted_mem}")
-                        elif 'usedmemory' in field_lower or 'used' in field_lower:
-                            formatted_mem = self._format_memory_value(value)
-                            self.device_info['memory_used'] = formatted_mem
-                            print(f"            Found used memory: {field_name} = {value} -> {formatted_mem}")
-    
-    def _extract_tmm_memory_improved(self, tmm_mem_data):
-        """Improved TMM memory extraction"""
-        if not tmm_mem_data or 'entries' not in tmm_mem_data:
-            return
-        
-        print("          Extracting TMM memory...")
-        
-        for entry_name, entry_data in tmm_mem_data['entries'].items():
-            nested_stats = entry_data.get('nestedStats', {})
-            entries = nested_stats.get('entries', {})
-            
-            for field_name, field_data in entries.items():
-                if isinstance(field_data, dict):
-                    value = field_data.get('value') or field_data.get('description')
-                    
-                    if value and ('total' in field_name.lower() or 'memory' in field_name.lower()):
-                        formatted_mem = self._format_memory_value(value)
-                        self.device_info['tmm_memory'] = formatted_mem
-                        print(f"            Found TMM memory: {field_name} = {value} -> {formatted_mem}")
-                        break
     
     def _get_ha_status_improved(self):
         """Improved HA status detection with multiple methods"""
@@ -858,8 +1063,19 @@ class BigIPInfoExtractor:
         print("Extracting additional information...")
         self.get_additional_info()
         
+        # Create and download QKView if requested
+        if self.create_qkview:
+            print("Creating and downloading QKView...")
+            qkview_success = self.create_and_download_qkview()
+            self.device_info['qkview_downloaded'] = 'Yes' if qkview_success else 'Failed'
+        else:
+            self.device_info['qkview_downloaded'] = 'Not requested'
+        
         # Add extraction timestamp
         self.device_info['extraction_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Clean up session
+        self.logout()
         
         return True
 
@@ -886,6 +1102,7 @@ def write_to_csv(devices_info, filename='bigip_device_info.csv'):
         'tmm_memory',
         'cpu_count',
         'ha_status',
+        'qkview_downloaded',
         'extraction_timestamp'
     ]
     
@@ -993,6 +1210,9 @@ def process_devices_from_file(args):
     devices_info = []
     
     print(f"\nProcessing {len(devices)} devices from input file...")
+    if args.qkview:
+        print("QKView creation and download enabled using F5 autodeploy endpoint")
+        print(f"QKView timeout: {args.qkview_timeout} seconds ({args.qkview_timeout/60:.1f} minutes)")
     print("=" * 50)
     
     for i, device in enumerate(devices, 1):
@@ -1007,7 +1227,13 @@ def process_devices_from_file(args):
             print(f"  Using command line username: {args.user}")
         
         # Extract device information
-        extractor = BigIPInfoExtractor(device['ip'], username, password)
+        extractor = BigIPInfoExtractor(
+            device['ip'], 
+            username, 
+            password, 
+            create_qkview=args.qkview,
+            qkview_timeout=args.qkview_timeout
+        )
         
         if extractor.extract_all_info():
             devices_info.append(extractor.device_info)
@@ -1016,7 +1242,10 @@ def process_devices_from_file(args):
             # Display brief summary
             hostname = extractor.device_info.get('hostname', 'N/A')
             version = extractor.device_info.get('active_version', 'N/A')
+            qkview_status = extractor.device_info.get('qkview_downloaded', 'N/A')
             print(f"    Hostname: {hostname}, Version: {version}")
+            if args.qkview:
+                print(f"    QKView: {qkview_status}")
         else:
             print(f"  ✗ Failed to extract information from {device['ip']}")
             
@@ -1030,13 +1259,22 @@ def process_devices_from_file(args):
                     retry_password = getpass.getpass("    Password: ")
                     
                     # Retry with new credentials
-                    extractor = BigIPInfoExtractor(device['ip'], retry_username, retry_password)
+                    extractor = BigIPInfoExtractor(
+                        device['ip'], 
+                        retry_username, 
+                        retry_password,
+                        create_qkview=args.qkview,
+                        qkview_timeout=args.qkview_timeout
+                    )
                     if extractor.extract_all_info():
                         devices_info.append(extractor.device_info)
                         print(f"  ✓ Successfully extracted information from {device['ip']} (retry)")
                         hostname = extractor.device_info.get('hostname', 'N/A')
                         version = extractor.device_info.get('active_version', 'N/A')
+                        qkview_status = extractor.device_info.get('qkview_downloaded', 'N/A')
                         print(f"    Hostname: {hostname}, Version: {version}")
+                        if args.qkview:
+                            print(f"    QKView: {qkview_status}")
                     else:
                         print(f"  ✗ Authentication failed again for {device['ip']}")
     
@@ -1056,7 +1294,13 @@ def process_devices_interactively(args):
         username, password = get_credentials_for_device(args)
         
         # Extract device information
-        extractor = BigIPInfoExtractor(host, username, password)
+        extractor = BigIPInfoExtractor(
+            host, 
+            username, 
+            password, 
+            create_qkview=args.qkview,
+            qkview_timeout=args.qkview_timeout
+        )
         
         if extractor.extract_all_info():
             devices_info.append(extractor.device_info)
@@ -1068,6 +1312,8 @@ def process_devices_interactively(args):
             print(f"  Serial: {extractor.device_info.get('serial_number', 'N/A')}")
             print(f"  Version: {extractor.device_info.get('active_version', 'N/A')}")
             print(f"  Emergency Hotfixes: {extractor.device_info.get('emergency_hotfixes', 'None')}")
+            if args.qkview:
+                print(f"  QKView: {extractor.device_info.get('qkview_downloaded', 'N/A')}")
         else:
             print(f"Failed to extract information from {host}")
             
@@ -1081,7 +1327,13 @@ def process_devices_interactively(args):
                     password = getpass.getpass("Enter password: ")
                     
                     # Retry with new credentials
-                    extractor = BigIPInfoExtractor(host, username, password)
+                    extractor = BigIPInfoExtractor(
+                        host, 
+                        username, 
+                        password,
+                        create_qkview=args.qkview,
+                        qkview_timeout=args.qkview_timeout
+                    )
                     if extractor.extract_all_info():
                         devices_info.append(extractor.device_info)
                         print(f"Successfully extracted information from {host}")
@@ -1092,6 +1344,8 @@ def process_devices_interactively(args):
                         print(f"  Serial: {extractor.device_info.get('serial_number', 'N/A')}")
                         print(f"  Version: {extractor.device_info.get('active_version', 'N/A')}")
                         print(f"  Emergency Hotfixes: {extractor.device_info.get('emergency_hotfixes', 'None')}")
+                        if args.qkview:
+                            print(f"  QKView: {extractor.device_info.get('qkview_downloaded', 'N/A')}")
                     else:
                         print(f"Authentication failed again for {host}")
         
@@ -1112,13 +1366,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python %(prog)s                                              # Interactive mode
-  python %(prog)s --user admin                                 # Specify user, prompt for password  
-  python %(prog)s --user admin --pass mypassword               # Specify both credentials
-  python %(prog)s --user admin --out my_devices.csv            # Specify output file
-  python %(prog)s -u admin -p mypass -o device_report.csv      # Short form options
-  python %(prog)s --in devices.csv --out results.csv           # Bulk processing from CSV
-  python %(prog)s --in devices.csv --user admin                # CSV with fallback credentials
+    python %(prog)s                                              # Interactive mode
+    python %(prog)s --user admin                                 # Specify user, prompt for password  
+    python %(prog)s --user admin --pass mypassword               # Specify both credentials
+    python %(prog)s --user admin --out my_devices.csv            # Specify output file
+    python %(prog)s -u admin -p mypass -o device_report.csv      # Short form options
+    python %(prog)s --in devices.csv --out results.csv           # Bulk processing from CSV
+    python %(prog)s --in devices.csv --user admin                # CSV with fallback credentials
+    python %(prog)s --in devices.csv --qkview --out results.csv  # Include QKView creation
+    python %(prog)s -q --qkview-timeout 1200 --in devices.csv    # QKView with 20min timeout
         """
     )
     
@@ -1133,13 +1389,34 @@ Examples:
     parser.add_argument('--in', '--input', '-i',
                        dest='input_file',
                        help='Input CSV file with device information (format: ip,username,password)')
+    parser.add_argument('--qkview', '-q',
+                       action='store_true',
+                       help='Create and download QKView from each device using F5 autodeploy endpoint')
+    parser.add_argument('--qkview-timeout',
+                       type=int,
+                       default=1200,
+                       help='Timeout for QKView creation in seconds (default: 1200)')
+    parser.add_argument('--no-qkview',
+                       action='store_true',
+                       help='Disable QKView creation (default behavior)')
     
     args = parser.parse_args()
+    
+    # Handle QKView options
+    if args.no_qkview:
+        args.qkview = False
     
     # Security warning for password in command line
     if args.password:
         print("WARNING: Using password in command line arguments is not secure.")
         print("Consider using --user only and entering password interactively.\n")
+    
+    # QKView information
+    if args.qkview:
+        print("QKView creation enabled using F5 autodeploy endpoint")
+        print(f"QKView timeout set to {args.qkview_timeout} seconds ({args.qkview_timeout/60:.1f} minutes)")
+        print("QKViews will be downloaded to the 'qkviews' directory")
+        print("This will take additional time per device\n")
     
     print("BIG-IP Device Information Extractor")
     print("=" * 40)
@@ -1157,6 +1434,11 @@ Examples:
         write_to_csv(devices_info, args.out)
         print(f"\nExtracted information for {len(devices_info)} device(s)")
         print(f"Results written to: {args.out}")
+        if args.qkview:
+            qkview_count = sum(1 for device in devices_info if device.get('qkview_downloaded') == 'Yes')
+            print(f"QKViews downloaded: {qkview_count}/{len(devices_info)}")
+            if qkview_count > 0:
+                print(f"QKView files saved in: ./qkviews/")
     else:
         print("No device information collected.")
         # Still create an empty CSV file with headers
