@@ -268,7 +268,7 @@ class BigIPInfoExtractor:
         """Wait for QKView task completion using F5 autodeploy endpoint"""
         try:
             print(f"    Waiting for QKView task completion...")
-            print(f"    Status check for task {task_id}")
+            print(f"      Status check for task {task_id}")
             
             status_url = f"{self.base_url}/mgmt/cm/autodeploy/qkview/{task_id}"
             start_time = time.time()
@@ -292,12 +292,12 @@ class BigIPInfoExtractor:
                     current_generation = result.get('generation', 'N/A')
                     
                     if current_status == 'SUCCEEDED':
-                        print(f'\r    [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Completed!                    ')
+                        print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Completed!                              ')
                         print(f'    ✓ QKView generation completed successfully (after {elapsed}s)')
                         return result
                     
                     elif current_status == 'FAILED':
-                        print(f'\r    [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Failed!                    ')
+                        print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Failed!                              ')
                         print(f'    ✗ QKView generation failed (after {elapsed}s)')
                         return None
                     
@@ -306,28 +306,28 @@ class BigIPInfoExtractor:
                         for i in range(check_interval):
                             spinner = spinner_chars[spinner_index % len(spinner_chars)]
                             remaining = check_interval - i
-                            print(f'\r    [{elapsed + i}s] Task Status (Generation: {current_generation}): {current_status} : Waiting {remaining} seconds before next check... {spinner}', end='', flush=True)
+                            print(f'\r      [{elapsed + i}s] Task Status (Generation: {current_generation}): {current_status} : Waiting {remaining} seconds before next check... {spinner}  ', end='', flush=True)
                             spinner_index += 1
                             time.sleep(1)
                     else:
-                        print(f'\r    [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Unknown status                    ')
+                        print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Unknown status                              ')
                         time.sleep(check_interval)
                 
                 except requests.exceptions.RequestException as e:
-                    print(f'\r    [{elapsed}s] Task Status (Generation: {current_generation}): ERROR : Connection failed (attempt {check_count})                    ')
+                    print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): ERROR : Connection failed (attempt {check_count})                              ')
                     if check_count >= 3:
                         print(f'\n    ✗ Multiple consecutive failures, aborting')
                         return None
                     time.sleep(check_interval)
             
             elapsed = int(time.time() - start_time)
-            print(f'\r    [{elapsed}s] Task Status (Generation: {current_generation}): TIMEOUT : Exceeded {self.qkview_timeout}s limit                    ')
+            print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): TIMEOUT : Exceeded {self.qkview_timeout}s limit                              ')
             print(f'\n    ✗ QKView creation timed out after {elapsed} seconds')
             return None
             
         except Exception as e:
             elapsed = int(time.time() - start_time) if 'start_time' in locals() else 0
-            print(f'\r    [{elapsed}s] Task Status (Generation: N/A): ERROR : {str(e)}                    ')
+            print(f'\r      [{elapsed}s] Task Status (Generation: N/A): ERROR : {str(e)}                              ')
             print(f'\n    ✗ Error waiting for QKView completion')
             return None
     
