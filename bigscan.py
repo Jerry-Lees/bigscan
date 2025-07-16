@@ -225,37 +225,26 @@ class BigIPInfoExtractor:
             qkview_payload = {"name": qkview_name}
             
             print(f"    Creating QKView task: {qkview_name}")
-            print(f"    QKView endpoint: {qkview_url}")
-            print(f"    QKView payload: {json.dumps(qkview_payload, indent=2)}")
             
             # Submit QKView creation request (asynchronous)
-            start_time = time.time()
             try:
                 response = self.session.post(
                     qkview_url,
                     json=qkview_payload,
                     timeout=30  # Quick timeout for task creation
                 )
-                elapsed = time.time() - start_time
-                print(f"    QKView task creation completed in {elapsed:.2f} seconds")
                 
             except requests.exceptions.Timeout:
-                elapsed = time.time() - start_time
-                print(f"    ✗ QKView task creation TIMED OUT after {elapsed:.2f} seconds")
+                print(f"    ✗ QKView task creation timed out")
                 return None
             except Exception as e:
-                elapsed = time.time() - start_time
-                print(f"    ✗ QKView task creation failed after {elapsed:.2f} seconds: {str(e)}")
+                print(f"    ✗ QKView task creation failed: {str(e)}")
                 return None
-            
-            print(f"    QKView task creation response status: {response.status_code}")
             
             if response.status_code in [200, 202]:
                 try:
                     response_data = response.json()
-                    print(f"    QKView task creation response: {json.dumps(response_data, indent=2)}")
                 except:
-                    print(f"    QKView task creation response (raw): {response.text}")
                     response_data = {}
                 
                 # Extract the task ID from the response
@@ -264,42 +253,32 @@ class BigIPInfoExtractor:
                     print(f"    QKView task created with ID: {task_id}")
                     return task_id
                 else:
-                    print(f"    No task ID found in response")
+                    print(f"    ✗ No task ID found in response")
                     return None
                     
             else:
                 print(f"    ✗ Failed to create QKView task: {response.status_code}")
-                try:
-                    error_data = response.json()
-                    print(f"    Error response: {json.dumps(error_data, indent=2)}")
-                except:
-                    print(f"    Error response (raw): {response.text}")
                 return None
                 
         except Exception as e:
             print(f"    ✗ Error creating QKView task: {str(e)}")
-            import traceback
-            print(f"    Traceback: {traceback.format_exc()}")
             return None
     
     def _wait_for_qkview_completion(self, task_id):
         """Wait for QKView task completion using F5 autodeploy endpoint"""
         try:
             print(f"    Waiting for QKView task completion...")
-            print(f"    Monitoring task ID: {task_id}")
-            print(f"    Maximum wait time: {self.qkview_timeout} seconds ({self.qkview_timeout/60:.1f} minutes)")
             
             status_url = f"{self.base_url}/mgmt/cm/autodeploy/qkview/{task_id}"
             start_time = time.time()
             check_interval = 15  # Check every 15 seconds
-            last_status = None
             check_count = 0
+            spinner_chars = ['/', '-', '\\', '|']
+            spinner_index = 0
             
             while (time.time() - start_time) < self.qkview_timeout:
                 check_count += 1
                 elapsed = int(time.time() - start_time)
-                
-                print(f"    [{elapsed}s] Status check #{check_count} for task {task_id}")
                 
                 try:
                     response = self.session.get(status_url, timeout=30)
@@ -309,46 +288,49 @@ class BigIPInfoExtractor:
                     status = result.get('status', 'Unknown')
                     generation = result.get('generation', 'N/A')
                     
-                    print(f"    Task Status: {status}, Generation: {generation}")
+                    # Clear the previous line and print new status
+                    if check_count > 1:
+                        print('\r' + ' ' * 80, end='')  # Clear line
+                        print(f'\r    [{elapsed}s] Status check #{check_count} for task {task_id}')
+                        print(f'    Task Status: {status}, Generation: {generation}')
+                    else:
+                        print(f'    [{elapsed}s] Status check #{check_count} for task {task_id}')
+                        print(f'    Task Status: {status}, Generation: {generation}')
                     
                     if status == 'SUCCEEDED':
-                        print(f"    ✓ QKView generation completed successfully (after {elapsed}s)")
-                        qkview_uri = result.get('qkviewUri')
-                        if qkview_uri:
-                            print(f"    QKView download URI: {qkview_uri}")
+                        print(f'    ✓ QKView generation completed successfully (after {elapsed}s)')
                         return result
                     
                     elif status == 'FAILED':
-                        print(f"    ✗ QKView generation failed (after {elapsed}s)")
-                        print(f"    Full response: {result}")
+                        print(f'    ✗ QKView generation failed (after {elapsed}s)')
                         return None
                     
                     elif status == 'IN_PROGRESS':
-                        if status != last_status:
-                            print(f"    QKView generation in progress...")
-                        last_status = status
+                        # Show spinning progress indicator
+                        for i in range(check_interval):
+                            spinner = spinner_chars[spinner_index % len(spinner_chars)]
+                            print(f'\r    Waiting {check_interval - i} seconds before next check... {spinner}', end='', flush=True)
+                            spinner_index += 1
+                            time.sleep(1)
+                        print()  # New line after spinner
                     else:
-                        print(f"    Unknown task status: {status}")
-                        print(f"    Full response: {result}")
+                        print(f'    Unknown task status: {status}')
+                        time.sleep(check_interval)
                 
                 except requests.exceptions.RequestException as e:
-                    print(f"    Error checking status (attempt {check_count}): {str(e)}")
+                    print(f'    ✗ Error checking status (attempt {check_count}): {str(e)}')
                     if check_count >= 3:
-                        print(f"    Multiple consecutive failures, aborting")
+                        print(f'    Multiple consecutive failures, aborting')
                         return None
-                
-                print(f"    Waiting {check_interval} seconds before next check...")
-                time.sleep(check_interval)
+                    time.sleep(check_interval)
             
             elapsed = int(time.time() - start_time)
-            print(f"    ✗ QKView creation TIMED OUT after {elapsed} seconds (limit: {self.qkview_timeout}s)")
+            print(f'    ✗ QKView creation timed out after {elapsed} seconds (limit: {self.qkview_timeout}s)')
             return None
             
         except Exception as e:
             elapsed = int(time.time() - start_time) if 'start_time' in locals() else 0
-            print(f"    ✗ Error waiting for QKView completion (after {elapsed}s): {str(e)}")
-            import traceback
-            print(f"    Traceback: {traceback.format_exc()}")
+            print(f'    ✗ Error waiting for QKView completion (after {elapsed}s): {str(e)}')
             return None
     
     def _download_qkview(self, qkview_info):
@@ -365,16 +347,14 @@ class BigIPInfoExtractor:
             filename = qkview_info.get('name', f'{self.host}.qkview')
             
             if not qkview_uri:
-                print(f"    ✗ No download URI found in QKView info: {qkview_info}")
+                print(f"    ✗ No download URI found in QKView info")
                 return False
             
             print(f"    Downloading QKView: {filename}")
-            print(f"    Original URI: {qkview_uri}")
             
             # Handle localhost replacement in URI
             if 'localhost' in qkview_uri:
                 download_url = qkview_uri.replace('localhost', self.host)
-                print(f"    Corrected URL: {download_url}")
             elif qkview_uri.startswith('https://'):
                 download_url = qkview_uri
             else:
@@ -391,12 +371,7 @@ class BigIPInfoExtractor:
                     'X-F5-Auth-Token': self.token
                 })
             
-            print(f"    Download URL: {download_url}")
-            print(f"    Local path: {local_path}")
-            print(f"    Download timeout: {self.qkview_timeout} seconds")
-            
             # Download the file with progress indication
-            start_time = time.time()
             try:
                 response = download_session.get(
                     download_url,
@@ -408,7 +383,7 @@ class BigIPInfoExtractor:
                 # Get file size from headers if available
                 total_size = int(response.headers.get('content-length', 0))
                 if total_size > 0:
-                    print(f"    QKView file size: {total_size} bytes ({total_size / (1024*1024):.1f} MB)")
+                    print(f"    QKView file size: {total_size / (1024*1024):.1f} MB")
                 
                 # Save file locally with progress
                 downloaded = 0
@@ -420,11 +395,10 @@ class BigIPInfoExtractor:
                             # Progress update every MB
                             if total_size > 0 and downloaded % (1024*1024) == 0:
                                 progress = (downloaded / total_size) * 100
-                                print(f"      Download progress: {progress:.1f}% ({downloaded / (1024*1024):.1f} MB)")
+                                print(f"      Download progress: {progress:.1f}%")
                 
-                elapsed = time.time() - start_time
                 final_size = os.path.getsize(local_path)
-                print(f"    ✓ Downloaded: {filename} ({final_size} bytes) in {elapsed:.1f} seconds")
+                print(f"    ✓ Downloaded: {filename} ({final_size / (1024*1024):.1f} MB)")
                 
                 # Verify file size if known
                 if total_size > 0 and final_size != total_size:
@@ -434,18 +408,14 @@ class BigIPInfoExtractor:
                 return True
                 
             except requests.exceptions.Timeout:
-                elapsed = time.time() - start_time
-                print(f"    ✗ Download TIMED OUT after {elapsed:.2f} seconds")
+                print(f"    ✗ Download timed out")
                 return False
             except Exception as e:
-                elapsed = time.time() - start_time
-                print(f"    ✗ Download failed after {elapsed:.2f} seconds: {str(e)}")
+                print(f"    ✗ Download failed: {str(e)}")
                 return False
                 
         except Exception as e:
             print(f"    ✗ Error downloading QKView: {str(e)}")
-            import traceback
-            print(f"    Traceback: {traceback.format_exc()}")
             return False
     
     def _cleanup_qkview_task(self, task_id):
