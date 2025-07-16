@@ -855,7 +855,7 @@ run_tests() {
     
     # Run the test script
     if [[ -f "test_scanner.py" ]]; then
-        python test_scanner.py
+        python3 test_scanner.py
         local test_result=$?
         
         if [[ $test_result -eq 0 ]]; then
@@ -869,7 +869,7 @@ run_tests() {
         
         # Basic test - check if script runs without error
         print_info "Testing script help command..."
-        if python "$SCRIPT_NAME" --help > /dev/null 2>&1; then
+        if python3 "$SCRIPT_NAME" --help > /dev/null 2>&1; then
             print_success "Script runs without syntax errors"
         else
             print_error "Script has syntax errors or missing dependencies"
@@ -959,9 +959,45 @@ cleanup_on_error() {
 # Main Execution
 #######################################################################
 
+check_python3_availability() {
+    print_header "Initial Python 3 Check"
+    
+    # Check if python3 is available before proceeding
+    if ! check_command python3; then
+        print_error "Python 3 is not installed or not in PATH"
+        print_info "This script requires Python 3 to run"
+        print_info ""
+        print_info "To install Python 3:"
+        print_info "  Ubuntu/Debian: sudo apt update && sudo apt install python3-full"
+        print_info "  RHEL/CentOS:   sudo yum install python3"
+        print_info "  Fedora:        sudo dnf install python3"
+        print_info "  macOS:         brew install python3"
+        print_info ""
+        print_info "After installing Python 3, run this script again."
+        exit 1
+    else
+        local python_version=$(python3 --version 2>&1 | cut -d' ' -f2)
+        print_success "Python 3 is available: $python_version"
+        
+        # Check minimum version
+        local major_version=$(echo $python_version | cut -d'.' -f1)
+        local minor_version=$(echo $python_version | cut -d'.' -f2)
+        
+        if [[ $major_version -eq 3 && $minor_version -ge 7 ]] || [[ $major_version -gt 3 ]]; then
+            print_success "Python version meets requirements (3.7+)"
+        else
+            print_warning "Python version $python_version detected. Python 3.7+ recommended."
+            print_info "The script will continue but some features may not work optimally."
+        fi
+    fi
+}
+
 main() {
     print_header "BIG-IP Device Information Extractor - Enhanced Setup"
     print_info "Enhanced for improved QKView functionality with F5 autodeploy endpoints"
+    
+    # Check Python 3 availability first
+    check_python3_availability
     
     # Set up error handling
     trap cleanup_on_error ERR
