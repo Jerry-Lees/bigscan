@@ -795,7 +795,7 @@ class BigIPInfoExtractor:
                 # Device is responding, use current timestamp as fallback
                 from datetime import datetime
                 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                self.device_info['system_time'] = f"Local: {current_time}"
+                self.device_info['system_time'] = current_time
                 print(f"    Using local timestamp: {current_time}")
                 return
         except:
