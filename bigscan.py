@@ -215,7 +215,7 @@ class BigIPInfoExtractor:
         try:
             # Generate a unique QKView name with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            hostname = self.device_info.get('hostname', self.host).replace('.', '_')
+            hostname = self.device_info.get('hostname', self.host)
             qkview_name = f"{hostname}_{timestamp}.qkview"
             
             # Use the F5 autodeploy endpoint
