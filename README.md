@@ -29,7 +29,10 @@ This script is designed to assist in information gathering from F5 BIG-IP device
 For new systems, use the automated installation script:
 
 ```bash
-# Download or clone the repository
+# Clone the repository
+git clone https://github.com/Jerry-Lees/bigscan.git
+cd bigscan
+
 # Make the installer executable
 chmod +x install.sh
 
@@ -504,3 +507,4 @@ For issues and questions:
 **Last Updated**: July 2025  
 **Version**: 2.0  
 **Tested with**: TMOS 16.1.x, 17.1.x, Python 3.7-3.12
+
