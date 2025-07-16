@@ -133,8 +133,32 @@ install_python() {
     case $os_type in
         "debian")
             sudo apt-get update
-            # Install comprehensive Python setup
-            sudo apt-get install -y python3-full python3-pip python3-venv python3-dev build-essential
+            # Install comprehensive Python setup with explicit venv package
+            print_info "Installing Python packages for Debian/Ubuntu..."
+            
+            # Get Python version to install correct venv package
+            local python_version=""
+            if command -v python3 &> /dev/null; then
+                python_version=$(python3 --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1-2)
+            else
+                # Default to python3 if not installed yet
+                python_version="3"
+            fi
+            
+            # Install base packages
+            sudo apt-get install -y python3-full python3-pip python3-dev build-essential
+            
+            # Install venv package - try version-specific first, then generic
+            if [[ "$python_version" != "3" ]]; then
+                print_info "Installing python${python_version}-venv..."
+                sudo apt-get install -y python${python_version}-venv || sudo apt-get install -y python3-venv
+            else
+                sudo apt-get install -y python3-venv
+            fi
+            
+            # Ensure ensurepip is available
+            sudo apt-get install -y python3-venv python3.12-venv python3.11-venv python3.10-venv 2>/dev/null || true
+            
             # Ensure pip is working
             if ! command -v pip3 &> /dev/null; then
                 sudo apt-get install -y python3-pip
@@ -186,6 +210,14 @@ install_python() {
     else
         print_error "pip installation failed"
         exit 1
+    fi
+    
+    # Verify venv module
+    if python3 -m venv --help >/dev/null 2>&1; then
+        print_success "Python venv module verified"
+    else
+        print_warning "Python venv module verification failed"
+        print_info "This may cause virtual environment creation to fail"
     fi
 }
 
@@ -283,16 +315,26 @@ check_prerequisites() {
         fi
     fi
     
-    # Check for venv module
+    # Check for venv module more thoroughly
     if python3 -m venv --help >/dev/null 2>&1; then
         print_success "Python venv module available"
     else
         print_warning "Python venv module not found"
         if [[ "$SKIP_SYSTEM_DEPS" == false && "$PYTHON_ONLY" == false && "$TEST_ONLY" == false ]]; then
-            print_info "Installing python3-venv..."
+            print_info "Installing python3-venv packages..."
             case $os_type in
                 "debian")
-                    sudo apt-get install -y python3-venv
+                    # Try to install version-specific venv packages
+                    local python_version=$(python3 --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1-2)
+                    print_info "Python version detected: $python_version"
+                    
+                    # Install multiple venv packages to ensure compatibility
+                    sudo apt-get install -y python3-venv python3.12-venv python3.11-venv python3.10-venv 2>/dev/null || true
+                    
+                    # Try version-specific if we know the version
+                    if [[ "$python_version" != "" && "$python_version" != "3" ]]; then
+                        sudo apt-get install -y python${python_version}-venv || true
+                    fi
                     ;;
                 "redhat")
                     sudo yum install -y python3-venv || print_warning "python3-venv not available, virtual environment creation may fail"
@@ -304,6 +346,13 @@ check_prerequisites() {
                     print_warning "venv module not available on this system"
                     ;;
             esac
+            
+            # Verify venv after installation attempt
+            if python3 -m venv --help >/dev/null 2>&1; then
+                print_success "Python venv module now available"
+            else
+                print_warning "Python venv module still not available - virtual environment creation will be skipped"
+            fi
         fi
     fi
     
@@ -890,6 +939,7 @@ cleanup_on_error() {
     print_error "Installation failed!"
     print_info "Common solutions:"
     print_info "  • For PEP 668 errors: Use virtual environment (default behavior)"
+    print_info "  • For ensurepip/venv errors: sudo apt install python3.12-venv python3-venv"
     print_info "  • For permission errors: Check sudo access or use --python-only"
     print_info "  • For missing packages: Install python3-full and build-essential"
     print_info ""
@@ -899,6 +949,7 @@ cleanup_on_error() {
     print_info "  --test-only         (only run tests)"
     print_info ""
     print_info "Manual virtual environment setup:"
+    print_info "  sudo apt install python3.12-venv  # or python3.11-venv, etc."
     print_info "  python3 -m venv bigip_scanner_env"
     print_info "  source bigip_scanner_env/bin/activate"
     print_info "  pip install requests urllib3 certifi"
