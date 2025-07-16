@@ -195,12 +195,18 @@ class BigIPInfoExtractor:
             # Step 3: Download QKView
             if self._download_qkview(qkview_info):
                 print(f"  ✓ QKView downloaded successfully")
-                # Step 4: Cleanup remote task
+                # Step 4: Cleanup - delete task and original file (if it still exists)
+                filename = qkview_info.get('name')
+                if filename:
+                    self._cleanup_qkview_file(filename)
                 self._cleanup_qkview_task(task_id)
                 return True
             else:
                 print("  ✗ Failed to download QKView")
                 # Still try to cleanup
+                filename = qkview_info.get('name')
+                if filename:
+                    self._cleanup_qkview_file(filename)
                 self._cleanup_qkview_task(task_id)
                 return False
                 
@@ -332,7 +338,7 @@ class BigIPInfoExtractor:
             return None
     
     def _download_qkview(self, qkview_info):
-        """Download QKView file using F5 autodeploy download endpoint"""
+        """Download QKView file from the BIG-IP device"""
         try:
             # Create local qkviews directory if it doesn't exist
             local_dir = "qkviews"
@@ -340,15 +346,42 @@ class BigIPInfoExtractor:
                 os.makedirs(local_dir)
                 print(f"    Created directory: {local_dir}")
             
-            # Extract download information
-            qkview_uri = qkview_info.get('qkviewUri')
-            filename = qkview_info.get('name', f'{self.host}.qkview')
-            
-            if not qkview_uri:
-                print(f"    ✗ No download URI found in QKView info")
+            # Extract filename from qkview_info
+            filename = qkview_info.get('name')
+            if not filename:
+                print(f"    ✗ No filename found in QKView info")
                 return False
             
             print(f"    Downloading QKView: {filename}")
+            
+            # Try multiple download methods
+            download_methods = [
+                self._download_via_autodeploy_uri,
+                self._download_via_file_transfer,
+                self._download_via_bash_copy
+            ]
+            
+            for method in download_methods:
+                print(f"    Attempting download method: {method.__name__}")
+                if method(qkview_info, filename):
+                    return True
+            
+            print(f"    ✗ All download methods failed")
+            return False
+                
+        except Exception as e:
+            print(f"    ✗ Error downloading QKView: {str(e)}")
+            return False
+    
+    def _download_via_autodeploy_uri(self, qkview_info, filename):
+        """Download using the qkviewUri from autodeploy response"""
+        try:
+            qkview_uri = qkview_info.get('qkviewUri')
+            if not qkview_uri:
+                print(f"      No qkviewUri found in response")
+                return False
+            
+            print(f"      Using autodeploy URI: {qkview_uri}")
             
             # Handle localhost replacement in URI
             if 'localhost' in qkview_uri:
@@ -358,6 +391,108 @@ class BigIPInfoExtractor:
             else:
                 download_url = f"https://{self.host}{qkview_uri}"
             
+            return self._perform_download(download_url, filename)
+            
+        except Exception as e:
+            print(f"      Autodeploy URI method failed: {str(e)}")
+            return False
+    
+    def _download_via_file_transfer(self, qkview_info, filename):
+        """Download via F5 file transfer API after copying file"""
+        try:
+            # First try to copy the file using unix-mv (move instead of copy)
+            print(f"      Moving QKView to download directory...")
+            move_url = f"{self.base_url}/mgmt/tm/util/unix-mv"
+            move_payload = {
+                "command": "run",
+                "utilCmdArgs": f"/var/tmp/{filename} /var/config/rest/downloads/{filename}"
+            }
+            
+            response = self.session.post(move_url, json=move_payload, timeout=60)
+            if response.status_code != 200:
+                print(f"      Move operation failed: {response.status_code}")
+                return False
+            
+            # Now download via file transfer API
+            download_url = f"{self.base_url}/mgmt/shared/file-transfer/downloads/{filename}"
+            
+            success = self._perform_download(download_url, filename)
+            
+            # If download failed, try to move the file back
+            if not success:
+                print(f"      Download failed, attempting to restore file...")
+                restore_payload = {
+                    "command": "run",
+                    "utilCmdArgs": f"/var/config/rest/downloads/{filename} /var/tmp/{filename}"
+                }
+                self.session.post(move_url, json=restore_payload, timeout=30)
+            
+            return success
+            
+        except Exception as e:
+            print(f"      File transfer method failed: {str(e)}")
+            return False
+    
+    def _download_via_bash_copy(self, qkview_info, filename):
+        """Download directly from /var/tmp using file transfer API"""
+        try:
+            print(f"      Attempting direct download from /var/tmp...")
+            
+            # Try to download directly from the file system using a direct file path
+            # Some F5 versions allow direct file access via specific endpoints
+            download_urls = [
+                f"{self.base_url}/mgmt/shared/file-transfer/downloads/../../../var/tmp/{filename}",
+                f"{self.base_url}/mgmt/tm/file/ssl-cert/{filename}",
+                f"{self.base_url}/mgmt/filestore/files_d/Common_d/certificate_d/{filename}"
+            ]
+            
+            for url in download_urls:
+                try:
+                    print(f"      Trying direct access: {url}")
+                    if self._perform_download(url, filename):
+                        return True
+                except Exception as e:
+                    print(f"      Direct access failed: {str(e)}")
+                    continue
+            
+            print(f"      Direct download methods failed, trying alternative approach...")
+            
+            # Alternative: Use bash to create a symbolic link in a downloadable location
+            bash_url = f"{self.base_url}/mgmt/tm/util/bash"
+            
+            # Create symbolic link in /var/config/rest/downloads
+            link_payload = {
+                "command": "run", 
+                "utilCmdArgs": f"-c 'ln -sf /var/tmp/{filename} /var/config/rest/downloads/{filename}'"
+            }
+            
+            response = self.session.post(bash_url, json=link_payload, timeout=60)
+            if response.status_code != 200:
+                print(f"      Symbolic link creation failed: {response.status_code}")
+                return False
+            
+            # Download via the symbolic link
+            download_url = f"{self.base_url}/mgmt/shared/file-transfer/downloads/{filename}"
+            
+            success = self._perform_download(download_url, filename)
+            
+            # Clean up the symbolic link
+            cleanup_payload = {
+                "command": "run",
+                "utilCmdArgs": f"-c 'rm -f /var/config/rest/downloads/{filename}'"
+            }
+            self.session.post(bash_url, json=cleanup_payload, timeout=30)
+            
+            return success
+            
+        except Exception as e:
+            print(f"      Direct download method failed: {str(e)}")
+            return False
+    
+    def _perform_download(self, download_url, filename):
+        """Perform the actual file download"""
+        try:
+            local_dir = "qkviews"
             local_path = os.path.join(local_dir, filename)
             
             # Create download session with same authentication
@@ -369,51 +504,58 @@ class BigIPInfoExtractor:
                     'X-F5-Auth-Token': self.token
                 })
             
+            print(f"      Starting download from: {download_url}")
+            
             # Download the file with progress indication
-            try:
-                response = download_session.get(
-                    download_url,
-                    timeout=self.qkview_timeout,
-                    stream=True
-                )
-                response.raise_for_status()
-                
-                # Get file size from headers if available
-                total_size = int(response.headers.get('content-length', 0))
-                if total_size > 0:
-                    print(f"    QKView file size: {total_size / (1024*1024):.1f} MB")
-                
-                # Save file locally with progress
-                downloaded = 0
-                with open(local_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            # Progress update every MB
-                            if total_size > 0 and downloaded % (1024*1024) == 0:
-                                progress = (downloaded / total_size) * 100
-                                print(f"      Download progress: {progress:.1f}%")
-                
-                final_size = os.path.getsize(local_path)
-                print(f"    ✓ Downloaded: {filename} ({final_size / (1024*1024):.1f} MB)")
-                
-                # Verify file size if known
-                if total_size > 0 and final_size != total_size:
-                    print(f"    Warning: File size mismatch. Expected: {total_size}, Downloaded: {final_size}")
+            response = download_session.get(
+                download_url,
+                timeout=self.qkview_timeout,
+                stream=True
+            )
+            response.raise_for_status()
+            
+            # Get file size from headers if available
+            total_size = int(response.headers.get('content-length', 0))
+            if total_size > 0:
+                print(f"      QKView file size: {total_size / (1024*1024):.1f} MB")
+            
+            # Save file locally with progress
+            downloaded = 0
+            chunk_size = 64 * 1024  # 64KB chunks
+            last_progress = 0
+            
+            with open(local_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        # Progress update every 10% or 10MB, whichever is smaller
+                        if total_size > 0:
+                            progress = (downloaded / total_size) * 100
+                            progress_threshold = min(10, (10 * 1024 * 1024 / total_size) * 100)
+                            if progress >= last_progress + progress_threshold:
+                                print(f"        Download progress: {progress:.1f}% ({downloaded / (1024*1024):.1f} MB)")
+                                last_progress = progress
+            
+            final_size = os.path.getsize(local_path)
+            print(f"      ✓ Downloaded: {filename} ({final_size / (1024*1024):.1f} MB)")
+            
+            # Verify file size if we know the expected size
+            if total_size > 0:
+                if abs(final_size - total_size) > 1024:  # Allow 1KB difference
+                    print(f"      Warning: File size mismatch. Expected: {total_size / (1024*1024):.1f} MB, Downloaded: {final_size / (1024*1024):.1f} MB")
                     return False
-                
-                return True
-                
-            except requests.exceptions.Timeout:
-                print(f"    ✗ Download timed out")
-                return False
-            except Exception as e:
-                print(f"    ✗ Download failed: {str(e)}")
-                return False
-                
+                else:
+                    print(f"      ✓ File size verified: {final_size / (1024*1024):.1f} MB")
+            
+            return True
+            
+        except requests.exceptions.Timeout:
+            print(f"      Download timed out")
+            return False
         except Exception as e:
-            print(f"    ✗ Error downloading QKView: {str(e)}")
+            print(f"      Download failed: {str(e)}")
             return False
     
     def _cleanup_qkview_task(self, task_id):
@@ -429,6 +571,24 @@ class BigIPInfoExtractor:
             
         except Exception as e:
             print(f"    Warning: Failed to cleanup QKView task {task_id}: {str(e)}")
+    
+    def _cleanup_qkview_file(self, filename):
+        """Clean up QKView file from /var/tmp after download"""
+        try:
+            cleanup_url = f"{self.base_url}/mgmt/tm/util/unix-rm"
+            cleanup_payload = {
+                "command": "run",
+                "utilCmdArgs": f"/var/tmp/{filename}"
+            }
+            
+            print(f"    Cleaning up original QKView file...")
+            response = self.session.post(cleanup_url, json=cleanup_payload, timeout=30)
+            response.raise_for_status()
+            
+            print(f"    ✓ Original QKView file cleaned up")
+            
+        except Exception as e:
+            print(f"    Warning: Failed to cleanup original QKView file: {str(e)}")
     
     def get_system_info(self):
         """Extract basic system information"""
