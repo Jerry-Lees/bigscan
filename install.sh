@@ -374,8 +374,10 @@ install_python_dependencies() {
     
     print_info "Installing required packages for enhanced QKView functionality..."
     
-    # Determine which pip to use
+    # Determine which pip to use and check if we're in a virtual environment
     local pip_cmd="pip3"
+    local use_venv=false
+    
     if ! check_command pip3; then
         if check_command pip; then
             pip_cmd="pip"
@@ -385,9 +387,46 @@ install_python_dependencies() {
         fi
     fi
     
-    print_info "Using pip command: $pip_cmd"
+    # Check if we're in a virtual environment
+    if [[ "$VIRTUAL_ENV" != "" ]]; then
+        print_info "Using virtual environment: $VIRTUAL_ENV"
+        use_venv=true
+    elif [[ -d "$VENV_NAME" && -f "$VENV_NAME/bin/activate" ]]; then
+        print_info "Activating existing virtual environment: $VENV_NAME"
+        source "$VENV_NAME/bin/activate"
+        use_venv=true
+    else
+        print_warning "No virtual environment detected"
+        print_info "Checking if system allows global pip installations..."
+        
+        # Test if we can install globally (handle PEP 668 externally-managed-environment)
+        if ! $pip_cmd install --dry-run requests >/dev/null 2>&1; then
+            print_warning "System prevents global pip installations (PEP 668 externally-managed-environment)"
+            print_info "Creating virtual environment for package installation..."
+            
+            # Try to create virtual environment
+            if python3 -m venv "$VENV_NAME" 2>/dev/null; then
+                source "$VENV_NAME/bin/activate"
+                pip_cmd="pip"  # In venv, usually just 'pip'
+                use_venv=true
+                print_success "Virtual environment created and activated"
+            else
+                print_error "Failed to create virtual environment"
+                print_info "Trying system package installation as fallback..."
+                install_system_python_packages
+                return
+            fi
+        fi
+    fi
     
-    # Install each package with version checking
+    print_info "Using pip command: $pip_cmd"
+    if [[ "$use_venv" == true ]]; then
+        print_info "Installing in virtual environment (recommended)"
+    else
+        print_info "Installing globally (system-wide)"
+    fi
+    
+    # Install each package with error handling
     for package in $PYTHON_REQUIREMENTS; do
         print_info "Installing $package..."
         
@@ -398,23 +437,37 @@ install_python_dependencies() {
                     print_success "$package installed (with SSL support)"
                 else
                     print_error "Failed to install $package"
-                    exit 1
+                    if [[ "$use_venv" == false ]]; then
+                        print_info "Trying system package installation as fallback..."
+                        install_system_python_packages
+                        return
+                    else
+                        exit 1
+                    fi
                 fi
                 ;;
             "urllib3")
                 if $pip_cmd install "urllib3>=1.26.0"; then
                     print_success "$package installed (with enhanced SSL handling)"
                 else
-                    print_error "Failed to install $package"
-                    exit 1
+                    print_warning "Failed to install $package, trying without version constraint..."
+                    if $pip_cmd install urllib3; then
+                        print_success "$package installed (fallback version)"
+                    else
+                        print_error "Failed to install $package"
+                    fi
                 fi
                 ;;
             "certifi")
                 if $pip_cmd install "certifi>=2021.1.1"; then
                     print_success "$package installed (for SSL certificate validation)"
                 else
-                    print_error "Failed to install $package"
-                    exit 1
+                    print_warning "Failed to install $package, trying without version constraint..."
+                    if $pip_cmd install certifi; then
+                        print_success "$package installed (fallback version)"
+                    else
+                        print_error "Failed to install $package"
+                    fi
                 fi
                 ;;
             *)
@@ -422,7 +475,6 @@ install_python_dependencies() {
                     print_success "$package installed"
                 else
                     print_error "Failed to install $package"
-                    exit 1
                 fi
                 ;;
         esac
@@ -441,6 +493,61 @@ install_python_dependencies() {
     else
         print_warning "colorama not installed (colored output may vary by platform)"
     fi
+}
+
+install_system_python_packages() {
+    print_header "Installing Python Packages via System Package Manager"
+    
+    local os_type=$(detect_os)
+    print_info "Attempting to install Python packages using system package manager..."
+    
+    case $os_type in
+        "debian")
+            print_info "Installing packages via apt..."
+            sudo apt-get update
+            
+            # Install system packages for required Python modules
+            if sudo apt-get install -y python3-requests python3-urllib3 python3-certifi; then
+                print_success "Python packages installed via apt"
+                
+                # Verify installation
+                if python3 -c "import requests, urllib3, certifi" 2>/dev/null; then
+                    print_success "Package imports verified"
+                else
+                    print_warning "Some packages may not be available or working correctly"
+                fi
+            else
+                print_error "Failed to install packages via apt"
+                print_info "You may need to create a virtual environment manually:"
+                print_info "  python3 -m venv bigip_scanner_env"
+                print_info "  source bigip_scanner_env/bin/activate"
+                print_info "  pip install requests urllib3 certifi"
+                exit 1
+            fi
+            ;;
+        "redhat"|"fedora")
+            print_info "Installing packages via yum/dnf..."
+            local pkg_cmd="yum"
+            if [[ "$os_type" == "fedora" ]]; then
+                pkg_cmd="dnf"
+            fi
+            
+            if sudo $pkg_cmd install -y python3-requests python3-urllib3 python3-certifi; then
+                print_success "Python packages installed via $pkg_cmd"
+            else
+                print_warning "Some packages may not be available via $pkg_cmd"
+                print_info "Consider using a virtual environment"
+            fi
+            ;;
+        *)
+            print_error "System package installation not supported for this OS"
+            print_info "Please create a virtual environment manually:"
+            print_info "  python3 -m venv bigip_scanner_env"
+            print_info "  source bigip_scanner_env/bin/activate"
+            print_info "  pip install requests urllib3 certifi"
+            exit 1
+            ;;
+    esac
 }
 
 create_test_files() {
@@ -781,10 +888,20 @@ EOF
 
 cleanup_on_error() {
     print_error "Installation failed!"
+    print_info "Common solutions:"
+    print_info "  • For PEP 668 errors: Use virtual environment (default behavior)"
+    print_info "  • For permission errors: Check sudo access or use --python-only"
+    print_info "  • For missing packages: Install python3-full and build-essential"
+    print_info ""
     print_info "You can try running with different options:"
     print_info "  --skip-system-deps  (skip system package installation)"
     print_info "  --python-only       (only install Python dependencies)"
     print_info "  --test-only         (only run tests)"
+    print_info ""
+    print_info "Manual virtual environment setup:"
+    print_info "  python3 -m venv bigip_scanner_env"
+    print_info "  source bigip_scanner_env/bin/activate"
+    print_info "  pip install requests urllib3 certifi"
 }
 
 #######################################################################
@@ -831,3 +948,4 @@ main() {
 
 # Run main function
 main "$@"
+
