@@ -128,21 +128,30 @@ check_command() {
 install_python() {
     local os_type=$1
     
-    print_info "Installing Python 3..."
+    print_info "Installing Python 3 and dependencies..."
     
     case $os_type in
         "debian")
             sudo apt-get update
-            sudo apt-get install -y python3 python3-pip python3-venv python3-dev
+            # Install comprehensive Python setup
+            sudo apt-get install -y python3-full python3-pip python3-venv python3-dev build-essential
+            # Ensure pip is working
+            if ! command -v pip3 &> /dev/null; then
+                sudo apt-get install -y python3-pip
+            fi
             ;;
         "redhat")
-            sudo yum install -y python3 python3-pip python3-devel
+            sudo yum install -y python3 python3-pip python3-devel gcc
+            # Install python3-venv if available
+            sudo yum install -y python3-venv || true
             ;;
         "fedora")
-            sudo dnf install -y python3 python3-pip python3-devel
+            sudo dnf install -y python3 python3-pip python3-devel gcc
+            # Install python3-venv if available
+            sudo dnf install -y python3-venv || true
             ;;
         "arch")
-            sudo pacman -S --noconfirm python python-pip
+            sudo pacman -S --noconfirm python python-pip base-devel
             ;;
         "macos")
             if check_command brew; then
@@ -154,9 +163,30 @@ install_python() {
             ;;
         *)
             print_error "Unsupported OS. Please install Python 3 manually."
+            print_info "Required packages: python3, python3-pip, python3-venv"
             exit 1
             ;;
     esac
+    
+    # Verify installation
+    sleep 2
+    if check_command python3; then
+        local python_version=$(python3 --version 2>&1 | cut -d' ' -f2)
+        print_success "Python 3 installed: $python_version"
+    else
+        print_error "Python 3 installation failed"
+        exit 1
+    fi
+    
+    # Verify pip3
+    if check_command pip3; then
+        print_success "pip3 verified"
+    elif check_command pip; then
+        print_success "pip verified"
+    else
+        print_error "pip installation failed"
+        exit 1
+    fi
 }
 
 #######################################################################
@@ -169,7 +199,8 @@ check_prerequisites() {
     local os_type=$(detect_os)
     print_info "Detected OS: $os_type"
     
-    # Check for Python 3
+    # Check for Python 3 first
+    local python_installed=false
     if check_command python3; then
         local python_version=$(python3 --version 2>&1 | cut -d' ' -f2)
         print_success "Python 3 found: $python_version"
@@ -180,27 +211,100 @@ check_prerequisites() {
         
         if [[ $major_version -eq 3 && $minor_version -ge 7 ]] || [[ $major_version -gt 3 ]]; then
             print_success "Python version is compatible (3.7+)"
+            python_installed=true
         else
             print_warning "Python version $python_version detected. Python 3.7+ recommended for best compatibility."
+            python_installed=true
         fi
     else
         print_warning "Python 3 not found"
+    fi
+    
+    # Install Python if needed and allowed
+    if [[ "$python_installed" == false ]]; then
         if [[ "$SKIP_SYSTEM_DEPS" == false && "$PYTHON_ONLY" == false && "$TEST_ONLY" == false ]]; then
             install_python "$os_type"
         else
             print_error "Python 3 is required but not installed"
+            print_info "Run without --skip-system-deps to install Python 3"
             exit 1
         fi
     fi
     
-    # Check for pip
+    # Check for pip (after potential Python installation)
+    local pip_installed=false
     if check_command pip3; then
         print_success "pip3 found"
+        pip_installed=true
     elif check_command pip; then
         print_success "pip found"
+        pip_installed=true
     else
-        print_error "pip not found. Please install pip."
-        exit 1
+        print_warning "pip not found"
+    fi
+    
+    # Install pip if needed and Python is available
+    if [[ "$pip_installed" == false ]]; then
+        if [[ "$SKIP_SYSTEM_DEPS" == false && "$PYTHON_ONLY" == false && "$TEST_ONLY" == false ]]; then
+            print_info "Installing pip..."
+            case $os_type in
+                "debian")
+                    sudo apt-get install -y python3-pip
+                    ;;
+                "redhat")
+                    sudo yum install -y python3-pip
+                    ;;
+                "fedora")
+                    sudo dnf install -y python3-pip
+                    ;;
+                "arch")
+                    sudo pacman -S --noconfirm python-pip
+                    ;;
+                "macos")
+                    python3 -m ensurepip --upgrade
+                    ;;
+                *)
+                    print_error "Could not install pip automatically. Please install pip manually."
+                    exit 1
+                    ;;
+            esac
+            
+            # Verify pip installation
+            if check_command pip3 || check_command pip; then
+                print_success "pip installed successfully"
+            else
+                print_error "pip installation failed"
+                exit 1
+            fi
+        else
+            print_error "pip is required but not installed"
+            print_info "Run without --skip-system-deps to install pip"
+            exit 1
+        fi
+    fi
+    
+    # Check for venv module
+    if python3 -m venv --help >/dev/null 2>&1; then
+        print_success "Python venv module available"
+    else
+        print_warning "Python venv module not found"
+        if [[ "$SKIP_SYSTEM_DEPS" == false && "$PYTHON_ONLY" == false && "$TEST_ONLY" == false ]]; then
+            print_info "Installing python3-venv..."
+            case $os_type in
+                "debian")
+                    sudo apt-get install -y python3-venv
+                    ;;
+                "redhat")
+                    sudo yum install -y python3-venv || print_warning "python3-venv not available, virtual environment creation may fail"
+                    ;;
+                "fedora")
+                    sudo dnf install -y python3-venv || print_warning "python3-venv not available, virtual environment creation may fail"
+                    ;;
+                *)
+                    print_warning "venv module not available on this system"
+                    ;;
+            esac
+        fi
     fi
     
     # Check if script exists
@@ -216,30 +320,72 @@ check_prerequisites() {
 setup_virtual_environment() {
     print_header "Setting Up Virtual Environment"
     
+    # Check if virtual environment creation is possible
+    if ! python3 -m venv --help >/dev/null 2>&1; then
+        print_error "Python venv module is not available"
+        print_info "Virtual environment creation will be skipped"
+        print_info "Dependencies will be installed globally"
+        return 1
+    fi
+    
     # Create virtual environment if it doesn't exist
     if [[ ! -d "$VENV_NAME" ]]; then
         print_info "Creating virtual environment: $VENV_NAME"
-        python3 -m venv "$VENV_NAME"
-        print_success "Virtual environment created"
+        
+        # Try to create virtual environment
+        if python3 -m venv "$VENV_NAME"; then
+            print_success "Virtual environment created"
+        else
+            print_error "Failed to create virtual environment"
+            print_info "Will proceed with global installation"
+            return 1
+        fi
     else
         print_info "Virtual environment already exists: $VENV_NAME"
     fi
     
     # Activate virtual environment
-    print_info "Activating virtual environment"
-    source "$VENV_NAME/bin/activate"
-    
-    # Upgrade pip
-    print_info "Upgrading pip"
-    pip install --upgrade pip
-    
-    print_success "Virtual environment ready"
+    if [[ -f "$VENV_NAME/bin/activate" ]]; then
+        print_info "Activating virtual environment"
+        source "$VENV_NAME/bin/activate"
+        
+        # Verify activation
+        if [[ "$VIRTUAL_ENV" != "" ]]; then
+            print_success "Virtual environment activated: $VIRTUAL_ENV"
+        else
+            print_warning "Virtual environment activation may have failed"
+        fi
+        
+        # Upgrade pip in virtual environment
+        print_info "Upgrading pip in virtual environment"
+        pip install --upgrade pip
+        
+        print_success "Virtual environment ready"
+        return 0
+    else
+        print_error "Virtual environment activation script not found"
+        print_info "Will proceed with global installation"
+        return 1
+    fi
 }
 
 install_python_dependencies() {
     print_header "Installing Python Dependencies"
     
     print_info "Installing required packages for enhanced QKView functionality..."
+    
+    # Determine which pip to use
+    local pip_cmd="pip3"
+    if ! check_command pip3; then
+        if check_command pip; then
+            pip_cmd="pip"
+        else
+            print_error "No pip command found"
+            exit 1
+        fi
+    fi
+    
+    print_info "Using pip command: $pip_cmd"
     
     # Install each package with version checking
     for package in $PYTHON_REQUIREMENTS; do
@@ -248,33 +394,49 @@ install_python_dependencies() {
         # Install with specific handling for different packages
         case $package in
             "requests")
-                pip install "requests>=2.25.0"
-                print_success "$package installed (with SSL support)"
+                if $pip_cmd install "requests>=2.25.0"; then
+                    print_success "$package installed (with SSL support)"
+                else
+                    print_error "Failed to install $package"
+                    exit 1
+                fi
                 ;;
             "urllib3")
-                pip install "urllib3>=1.26.0"
-                print_success "$package installed (with enhanced SSL handling)"
+                if $pip_cmd install "urllib3>=1.26.0"; then
+                    print_success "$package installed (with enhanced SSL handling)"
+                else
+                    print_error "Failed to install $package"
+                    exit 1
+                fi
                 ;;
             "certifi")
-                pip install "certifi>=2021.1.1"
-                print_success "$package installed (for SSL certificate validation)"
+                if $pip_cmd install "certifi>=2021.1.1"; then
+                    print_success "$package installed (for SSL certificate validation)"
+                else
+                    print_error "Failed to install $package"
+                    exit 1
+                fi
                 ;;
             *)
-                pip install "$package"
-                print_success "$package installed"
+                if $pip_cmd install "$package"; then
+                    print_success "$package installed"
+                else
+                    print_error "Failed to install $package"
+                    exit 1
+                fi
                 ;;
         esac
     done
     
     # Show installed packages
     print_info "Installed packages for BIG-IP scanner:"
-    pip list | grep -E "(requests|urllib3|certifi)" || echo "  (Package listing not available)"
+    $pip_cmd list | grep -E "(requests|urllib3|certifi)" || echo "  (Package listing not available)"
     
     # Check for additional useful packages
     print_info "Checking for optional enhancements..."
     
     # Install colorama for better cross-platform colored output (optional)
-    if pip install colorama >/dev/null 2>&1; then
+    if $pip_cmd install colorama >/dev/null 2>&1; then
         print_success "colorama installed (enhanced terminal colors)"
     else
         print_warning "colorama not installed (colored output may vary by platform)"
@@ -586,10 +748,22 @@ python bigscan.py --user admin --qkview --qkview-timeout 1200
 # Complete example with QKView
 python bigscan.py --user admin --pass mypassword --qkview --out devices.csv
 
-# Using the virtual environment (if created)
-source bigip_scanner_env/bin/activate
+EOF
+
+    # Show virtual environment instructions if it was created
+    if [[ -d "$VENV_NAME" && -f "$VENV_NAME/bin/activate" ]]; then
+        cat << EOF
+# Using the virtual environment:
+source $VENV_NAME/bin/activate
 python bigscan.py --help
 
+# To deactivate the virtual environment when done:
+deactivate
+
+EOF
+    fi
+
+    cat << 'EOF'
 Enhanced Features:
 • F5 autodeploy endpoint for reliable QKView generation
 • Real-time progress monitoring with spinning indicators
@@ -599,7 +773,9 @@ Enhanced Features:
 EOF
     
     print_info "Edit test_devices.csv with real device information for testing"
-    print_info "Remember to activate the virtual environment: source $VENV_NAME/bin/activate"
+    if [[ -d "$VENV_NAME" ]]; then
+        print_info "Remember to activate the virtual environment: source $VENV_NAME/bin/activate"
+    fi
     print_info "QKView files will be saved to the 'qkviews' directory"
 }
 
@@ -626,7 +802,10 @@ main() {
         check_prerequisites
         
         if [[ "$PYTHON_ONLY" != true ]]; then
-            setup_virtual_environment
+            # Try to set up virtual environment, but continue if it fails
+            if ! setup_virtual_environment; then
+                print_warning "Virtual environment setup failed, proceeding with global installation"
+            fi
         fi
         
         install_python_dependencies
@@ -639,6 +818,11 @@ main() {
         show_usage_examples
         print_success "Enhanced installation and testing completed successfully!"
         print_info "The scanner now includes improved QKView functionality with F5 autodeploy endpoints"
+        
+        # Show activation reminder if virtual environment was created
+        if [[ -d "$VENV_NAME" && -f "$VENV_NAME/bin/activate" ]]; then
+            print_info "Don't forget to activate the virtual environment: source $VENV_NAME/bin/activate"
+        fi
     else
         print_error "Testing failed. Please check the output above."
         exit 1
