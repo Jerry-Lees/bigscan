@@ -80,7 +80,7 @@ python bigscan.py --in test_devices.csv --out results.csv
 | `test_devices.csv` | Sample input CSV template | `install.sh` |
 | `test_scanner.py` | Automated test suite | `install.sh` |
 | `bigip_scanner_env/` | Python virtual environment | `install.sh` |
-| `qkviews/` | QKView download directory | `bigscan.py` (when using --qkview) |
+| `QKViews/` | QKView download directory | `bigscan.py` (when using --qkview) |
 
 ## Installation
 
@@ -250,7 +250,7 @@ QKView is F5's diagnostic file format that contains comprehensive system informa
 ### QKView Features
 - **F5 Autodeploy Endpoint**: Uses the official `/mgmt/cm/autodeploy/qkview` endpoint
 - **Asynchronous Processing**: Monitors task completion with real-time progress
-- **Automatic Download**: Downloads completed QKViews to local `qkviews/` directory
+- **Automatic Download**: Downloads completed QKViews to local `QKViews/` directory
 - **Cleanup**: Automatically removes temporary files from BIG-IP devices
 - **Progress Indicators**: Shows spinning progress and countdown timers
 - **Error Handling**: Comprehensive error handling and recovery
@@ -344,7 +344,7 @@ python bigscan.py --user admin --pass mypassword
 #### QKView Issues
 ```bash
 # Check QKView directory permissions
-ls -la qkviews/
+ls -la QKViews/
 
 # Increase QKView timeout
 python bigscan.py --user admin --qkview --qkview-timeout 1800
@@ -507,4 +507,3 @@ For issues and questions:
 **Last Updated**: July 2025  
 **Version**: 2.0  
 **Tested with**: TMOS 16.1.x, 17.1.x, Python 3.7-3.12
-
