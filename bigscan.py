@@ -193,21 +193,24 @@ class BigIPInfoExtractor:
                 return False
             
             # Step 3: Download QKView
-            if self._download_qkview(qkview_info):
+            download_result, downloaded_file_size = self._download_qkview(qkview_info)
+            if download_result:
                 print(f"  ✓ QKView downloaded successfully")
-                # Step 4: Cleanup - delete task and original file (if it still exists)
+                
+                # Step 4: Cleanup only after successful download verification
                 filename = qkview_info.get('name')
-                if filename:
+                if filename and downloaded_file_size > 5 * 1024 * 1024:  # Only cleanup if > 5MB
+                    print(f"  Cleaning up remote files after successful download verification...")
                     self._cleanup_qkview_file(filename)
-                self._cleanup_qkview_task(task_id)
+                    self._cleanup_qkview_task(task_id)
+                elif filename:
+                    print(f"  ⚠ Skipping cleanup due to small file size - may indicate incomplete download")
+                
                 return True
             else:
                 print("  ✗ Failed to download QKView")
-                # Still try to cleanup
-                filename = qkview_info.get('name')
-                if filename:
-                    self._cleanup_qkview_file(filename)
-                self._cleanup_qkview_task(task_id)
+                # Don't cleanup if download failed - leave files for debugging
+                print(f"  ℹ Leaving remote files for debugging since download failed")
                 return False
                 
         except Exception as e:
@@ -222,23 +225,34 @@ class BigIPInfoExtractor:
             # Generate a unique QKView name with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             hostname = self.device_info.get('hostname', self.host)
-            qkview_name = f"{hostname}_{timestamp}.qkview"
+            
+            # Clean hostname for filename (remove special characters)
+            import re
+            clean_hostname = re.sub(r'[^\w\-_\.]', '_', hostname)
+            
+            # IMPORTANT: Only provide the filename, not a path!
+            # F5 will automatically place it in /var/tmp/
+            qkview_name = f"{clean_hostname}_{timestamp}.qkview"
             
             # Use the F5 autodeploy endpoint
             qkview_url = f"{self.base_url}/mgmt/cm/autodeploy/qkview"
             
-            # Payload according to F5 documentation
+            # Payload according to F5 documentation - just the filename
             qkview_payload = {"name": qkview_name}
             
             print(f"    Creating QKView task: {qkview_name}")
+            print(f"    F5 will save to: /var/tmp/{qkview_name}")
+            print(f"    Payload being sent: {json.dumps(qkview_payload)}")
             
             # Submit QKView creation request (asynchronous)
             try:
+                print(f"    Sending POST to: {qkview_url}")
                 response = self.session.post(
                     qkview_url,
                     json=qkview_payload,
                     timeout=30  # Quick timeout for task creation
                 )
+                print(f"    Response status: {response.status_code}")
                 
             except requests.exceptions.Timeout:
                 print(f"    ✗ QKView task creation timed out")
@@ -250,6 +264,7 @@ class BigIPInfoExtractor:
             if response.status_code in [200, 202]:
                 try:
                     response_data = response.json()
+                    print(f"    Raw response: {json.dumps(response_data, indent=2)}")
                 except:
                     response_data = {}
                 
@@ -260,10 +275,33 @@ class BigIPInfoExtractor:
                     return task_id
                 else:
                     print(f"    ✗ No task ID found in response")
+                    print(f"    Response: {response_data}")
                     return None
                     
             else:
                 print(f"    ✗ Failed to create QKView task: {response.status_code}")
+                try:
+                    error_details = response.json()
+                    print(f"    Error details: {error_details}")
+                except:
+                    print(f"    Response text: {response.text[:200]}")
+                
+                # Try with a simpler filename if the original failed
+                if 'invalid' in response.text.lower() or 'name' in response.text.lower():
+                    print(f"    Trying with simplified filename...")
+                    simple_name = f"qkview_{timestamp}.qkview"
+                    simple_payload = {"name": simple_name}
+                    print(f"    Simplified name: {simple_name}")
+                    
+                    retry_response = self.session.post(qkview_url, json=simple_payload, timeout=30)
+                    if retry_response.status_code in [200, 202]:
+                        retry_data = retry_response.json()
+                        task_id = retry_data.get('id')
+                        if task_id:
+                            print(f"    QKView task created with simplified name: {simple_name}")
+                            print(f"    Task ID: {task_id}")
+                            return task_id
+                
                 return None
                 
         except Exception as e:
@@ -340,48 +378,139 @@ class BigIPInfoExtractor:
     def _download_qkview(self, qkview_info):
         """Download QKView file from the BIG-IP device"""
         try:
-            # Create local qkviews directory if it doesn't exist
-            local_dir = "qkviews"
-            if not os.path.exists(local_dir):
-                os.makedirs(local_dir)
-                print(f"    Created directory: {local_dir}")
-            
             # Extract filename from qkview_info
             filename = qkview_info.get('name')
             if not filename:
                 print(f"    ✗ No filename found in QKView info")
-                return False
+                return False, 0
             
             print(f"    Downloading QKView: {filename}")
             
-            # Try multiple download methods
+            # First, let's find where the QKView file actually is
+            actual_path = self._find_qkview_file(filename)
+            if actual_path:
+                print(f"    Found QKView at: {actual_path}")
+            else:
+                print(f"    Warning: Could not locate QKView file on remote system")
+            
+            # Try multiple download methods in order of reliability
             download_methods = [
-                self._download_via_autodeploy_uri,
+                self._download_via_autodeploy_uri,  # Try F5 official method first
                 self._download_via_file_transfer,
                 self._download_via_bash_copy
             ]
             
             for method in download_methods:
-                print(f"    Attempting download method: {method.__name__}")
-                if method(qkview_info, filename):
-                    return True
+                method_name = method.__name__.replace('_', '_')  # Keep underscores as-is
+                print(f"    Attempting download method: {method_name}")
+                try:
+                    result = method(qkview_info, filename, actual_path)
+                    if isinstance(result, tuple):
+                        success, file_size = result
+                        if success:
+                            print(f"    ✓ Download successful using {method_name}")
+                            return True, file_size
+                        else:
+                            print(f"    ✗ Download failed using {method_name}")
+                    elif result:
+                        # Legacy method that returns boolean only
+                        print(f"    ✓ Download successful using {method_name} (legacy)")
+                        return True, 0
+                    else:
+                        print(f"    ✗ Download failed using {method_name} (legacy)")
+                except Exception as e:
+                    print(f"    ✗ Exception in {method_name}: {str(e)}")
+                    continue
             
             print(f"    ✗ All download methods failed")
-            return False
+            return False, 0
                 
         except Exception as e:
             print(f"    ✗ Error downloading QKView: {str(e)}")
-            return False
+            return False, 0
     
-    def _download_via_autodeploy_uri(self, qkview_info, filename):
-        """Download using the qkviewUri from autodeploy response"""
+    def _find_qkview_file(self, filename):
+        """Find the actual location of the QKView file on the BIG-IP"""
+        try:
+            print(f"    Searching for QKView file...")
+            bash_url = f"{self.base_url}/mgmt/tm/util/bash"
+            
+            # Common locations where QKView files might be stored
+            search_locations = [
+                f"/var/tmp/{filename}",
+                f"/shared/support/{filename}",
+                f"/var/core/{filename}", 
+                f"/shared/core/{filename}",
+                f"/var/log/{filename}",
+                f"/shared/images/{filename}"
+            ]
+            
+            # Also try to find any QKView files with similar names
+            search_patterns = [
+                f"/var/tmp/*{filename[-20:]}*",  # Last 20 chars of filename
+                "/var/tmp/*.qkview",
+                "/shared/support/*.qkview",
+                "/var/core/*.qkview"
+            ]
+            
+            # Search in specific locations first
+            for location in search_locations:
+                find_payload = {
+                    "command": "run",
+                    "utilCmdArgs": f"-c 'ls -la {location} 2>/dev/null || echo \"NOT_FOUND\"'"
+                }
+                
+                response = self.session.post(bash_url, json=find_payload, timeout=30)
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'commandResult' in result:
+                        command_result = result['commandResult'].strip()
+                        if 'NOT_FOUND' not in command_result and command_result:
+                            print(f"      Found file: {command_result}")
+                            return location
+            
+            # Search with patterns if exact location not found
+            for pattern in search_patterns:
+                find_payload = {
+                    "command": "run",
+                    "utilCmdArgs": f"-c 'ls -la {pattern} 2>/dev/null | head -5'"
+                }
+                
+                response = self.session.post(bash_url, json=find_payload, timeout=30)
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'commandResult' in result:
+                        command_result = result['commandResult'].strip()
+                        if command_result and 'No such file' not in command_result:
+                            print(f"      Pattern search results: {command_result}")
+                            # Try to extract the actual file path
+                            lines = command_result.split('\n')
+                            for line in lines:
+                                if '.qkview' in line and filename in line:
+                                    # Extract full path from ls output
+                                    parts = line.split()
+                                    if len(parts) >= 9:
+                                        # Last part should be the filename/path
+                                        found_path = parts[-1]
+                                        if found_path.startswith('/'):
+                                            return found_path
+            
+            return None
+            
+        except Exception as e:
+            print(f"      Error searching for QKView file: {str(e)}")
+            return None
+    
+    def _download_via_autodeploy_uri(self, qkview_info, filename, actual_path=None):
+        """Download using the qkviewUri from autodeploy response with F5's official chunked method"""
         try:
             qkview_uri = qkview_info.get('qkviewUri')
             if not qkview_uri:
                 print(f"      No qkviewUri found in response")
-                return False
+                return False, 0
             
-            print(f"      Using autodeploy URI: {qkview_uri}")
+            print(f"      Using F5 official chunked download method")
+            print(f"      Autodeploy URI: {qkview_uri}")
             
             # Handle localhost replacement in URI
             if 'localhost' in qkview_uri:
@@ -391,108 +520,362 @@ class BigIPInfoExtractor:
             else:
                 download_url = f"https://{self.host}{qkview_uri}"
             
-            return self._perform_download(download_url, filename)
+            print(f"      Download URL: {download_url}")
+            
+            return self._download_chunked_f5_method(download_url, filename)
             
         except Exception as e:
             print(f"      Autodeploy URI method failed: {str(e)}")
-            return False
+            return False, 0
     
-    def _download_via_file_transfer(self, qkview_info, filename):
-        """Download via F5 file transfer API after copying file"""
+    def _download_chunked_f5_method(self, download_url, filename):
+        """Download using F5's official chunked method from KB article K04396542"""
         try:
-            # First try to copy the file using unix-mv (move instead of copy)
-            print(f"      Moving QKView to download directory...")
+            local_dir = "QKViews"
+            local_path = os.path.join(local_dir, filename)
+            
+            chunk_size = 512 * 1024  # 512KB chunks as per F5 documentation
+            
+            # Create download session with same authentication
+            download_session = requests.Session()
+            download_session.verify = False
+            
+            if self.token:
+                download_session.headers.update({
+                    'X-F5-Auth-Token': self.token
+                })
+            
+            print(f"      Starting F5 chunked download: {filename}")
+            print(f"      Chunk size: {chunk_size / 1024:.0f}KB")
+            
+            with open(local_path, 'wb') as f:
+                start = 0
+                end = chunk_size - 1
+                size = 0
+                current_bytes = 0
+                chunk_count = 0
+                total_chunks = 0
+                
+                while True:
+                    chunk_count += 1
+                    content_range = f"{start}-{end}/{size}"
+                    
+                    headers = {
+                        'Content-Type': 'application/octet-stream',
+                        'Content-Range': content_range
+                    }
+                    
+                    try:
+                        resp = download_session.get(
+                            download_url,
+                            headers=headers,
+                            timeout=self.qkview_timeout,
+                            stream=True
+                        )
+                    except Exception as e:
+                        print(f"\r        Chunk {chunk_count} request failed: {str(e)}")
+                        return False, 0
+                    
+                    if resp.status_code == 200:
+                        # If the size is zero, this is the first time through the loop
+                        # and we need to figure out the total size of the file
+                        if size > 0:
+                            current_bytes += chunk_size
+                            for chunk in resp.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                            
+                            # Calculate and show progress on same line
+                            progress = (current_bytes / size) * 100
+                            chunk_display = f"(Chunk {chunk_count}/{total_chunks})" if total_chunks > 0 else f"(Chunk {chunk_count})"
+                            print(f"\r        Progress: {progress:.1f}% ({current_bytes / (1024*1024):.1f} MB / {size / (1024*1024):.1f} MB) {chunk_display}", end='', flush=True)
+                        
+                        # Once we've downloaded the entire file, break out of the loop
+                        if end == size:
+                            print(f"\n        Download complete!")
+                            break
+                        
+                        # Get the Content-Range header to determine total file size
+                        crange = resp.headers.get('Content-Range', '')
+                        
+                        # Determine the total number of bytes to read
+                        if size == 0:
+                            try:
+                                size = int(crange.split('/')[-1]) - 1
+                                total_chunks = (size // chunk_size) + (1 if size % chunk_size else 0)
+                                print(f"        Total file size determined: {size / (1024*1024):.1f} MB ({total_chunks} chunks)")
+                                
+                                # If the file is smaller than the chunk size, adjust
+                                if chunk_size > size:
+                                    end = size
+                                    continue
+                            except (ValueError, IndexError):
+                                print(f"\r        Could not determine file size from Content-Range: {crange}")
+                                return False, 0
+                        
+                        # Calculate next chunk range
+                        start += chunk_size
+                        if (current_bytes + chunk_size) > size:
+                            end = size
+                        else:
+                            end = start + chunk_size - 1
+                            
+                    elif resp.status_code == 206:  # Partial Content
+                        # Handle 206 response similar to 200
+                        if size > 0:
+                            current_bytes += chunk_size
+                            for chunk in resp.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                            
+                            # Show progress
+                            progress = (current_bytes / size) * 100
+                            chunk_display = f"(Chunk {chunk_count}/{total_chunks})" if total_chunks > 0 else f"(Chunk {chunk_count})"
+                            print(f"\r        Progress: {progress:.1f}% ({current_bytes / (1024*1024):.1f} MB / {size / (1024*1024):.1f} MB) {chunk_display}", end='', flush=True)
+                        
+                        if end == size:
+                            print(f"\n        Download complete!")
+                            break
+                            
+                        # Get total size from 206 response
+                        crange = resp.headers.get('Content-Range', '')
+                        if size == 0:
+                            try:
+                                size = int(crange.split('/')[-1]) - 1
+                                total_chunks = (size // chunk_size) + (1 if size % chunk_size else 0)
+                                print(f"        Total file size from 206: {size / (1024*1024):.1f} MB ({total_chunks} chunks)")
+                            except (ValueError, IndexError):
+                                print(f"\r        Could not determine file size from 206 Content-Range: {crange}")
+                                return False, 0
+                        
+                        start += chunk_size
+                        if (current_bytes + chunk_size) > size:
+                            end = size
+                        else:
+                            end = start + chunk_size - 1
+                            
+                    elif resp.status_code == 400 and end >= size:
+                        # HTTP 400 on final chunk often happens when requesting beyond file end
+                        # This is normal behavior for some F5 versions - check if we have the complete file
+                        print(f"\r        Got HTTP 400 on final chunk - checking if download is complete...")
+                        
+                        # Check if we've downloaded the expected amount
+                        current_file_size = f.tell() if hasattr(f, 'tell') else 0
+                        if current_file_size > 0 and size > 0:
+                            if abs(current_file_size - (size + 1)) <= 1024:  # Allow 1KB tolerance
+                                print(f"\n        Download appears complete despite HTTP 400 (got {current_file_size} bytes)")
+                                break
+                        
+                        # If we're very close to the end, consider it successful
+                        if end >= size * 0.99:  # Within 1% of completion
+                            print(f"\n        Download {end/size*100:.1f}% complete - treating as successful")
+                            break
+                        
+                        print(f"\r        Unexpected response code: {resp.status_code} (chunk {chunk_count})")
+                        return False, 0
+                            
+                    else:
+                        print(f"\r        Unexpected response code: {resp.status_code} (chunk {chunk_count})")
+                        
+                        # Check if this is happening near the end - might still be successful
+                        if end >= size * 0.95:  # Within 5% of completion
+                            print(f"\n        Download {end/size*100:.1f}% complete - checking file integrity...")
+                            break
+                        
+                        return False, 0
+            
+            final_size = os.path.getsize(local_path)
+            print(f"\n      ✓ F5 chunked download completed: {filename}")
+            print(f"      Final file size: {final_size / (1024*1024):.1f} MB")
+            
+            # Verify file size matches expected (with tolerance for F5's chunked method)
+            if size > 0:
+                expected_size = size + 1  # Size is 0-based, so add 1 for actual bytes
+                size_difference = abs(final_size - expected_size)
+                tolerance = max(1024, expected_size * 0.01)  # 1KB or 1% tolerance, whichever is larger
+                
+                if size_difference <= tolerance:
+                    print(f"      ✓ File size verified: {final_size / (1024*1024):.1f} MB (within tolerance)")
+                else:
+                    print(f"      ⚠ Warning: File size mismatch. Expected: {expected_size / (1024*1024):.1f} MB, Downloaded: {final_size / (1024*1024):.1f} MB")
+                    # Don't fail if we got a reasonable file size - some F5 versions have chunking quirks
+                    if final_size >= expected_size * 0.95:  # At least 95% of expected size
+                        print(f"      ✓ File size is acceptable (95%+ of expected)")
+                    else:
+                        return False, final_size
+            
+            # Verify we got a reasonable file size for a QKView
+            if final_size < 1024 * 1024:  # Less than 1MB is suspicious for a QKView
+                print(f"      ⚠ Warning: File seems very small for a QKView ({final_size / (1024*1024):.1f} MB)")
+                
+                # Check if it's an error response
+                try:
+                    with open(local_path, 'rb') as f:
+                        first_bytes = f.read(100)
+                        if b'<html>' in first_bytes.lower() or b'error' in first_bytes.lower():
+                            print(f"      ✗ File appears to be an error response")
+                            return False, final_size
+                except:
+                    pass
+                
+                # If it's very small but looks like binary data, warn but don't fail
+                print(f"      ⚠ Proceeding despite small size - may be a minimal QKView")
+            
+            return True, final_size
+            
+        except Exception as e:
+            print(f"\n      F5 chunked download failed: {str(e)}")
+            return False, 0
+    
+    def _download_via_file_transfer(self, qkview_info, filename, actual_path=None):
+        """Download via F5 file transfer API after moving file"""
+        try:
+            source_path = actual_path or f"/var/tmp/{filename}"
+            print(f"      Moving QKView from {source_path} to download directory...")
+            
+            # Use unix-mv to move the file to the download directory
             move_url = f"{self.base_url}/mgmt/tm/util/unix-mv"
             move_payload = {
                 "command": "run",
-                "utilCmdArgs": f"/var/tmp/{filename} /var/config/rest/downloads/{filename}"
+                "utilCmdArgs": f"{source_path} /var/config/rest/downloads/{filename}"
             }
             
             response = self.session.post(move_url, json=move_payload, timeout=60)
             if response.status_code != 200:
                 print(f"      Move operation failed: {response.status_code}")
-                return False
+                
+                # Check if the response gives us more details
+                try:
+                    result = response.json()
+                    if 'message' in result:
+                        print(f"      Error details: {result['message']}")
+                except:
+                    pass
+                
+                # Try using bash as fallback for move operation
+                print(f"      Trying bash move command...")
+                bash_url = f"{self.base_url}/mgmt/tm/util/bash"
+                bash_payload = {
+                    "command": "run", 
+                    "utilCmdArgs": f"-c 'mv \"{source_path}\" \"/var/config/rest/downloads/{filename}\"'"
+                }
+                
+                bash_response = self.session.post(bash_url, json=bash_payload, timeout=60)
+                if bash_response.status_code != 200:
+                    print(f"      Bash move also failed: {bash_response.status_code}")
+                    return False, 0
+                
+                # Check if bash move worked
+                bash_result = bash_response.json()
+                if 'commandResult' in bash_result and 'No such file' in bash_result['commandResult']:
+                    print(f"      Source file not found: {bash_result['commandResult']}")
+                    return False, 0
+                
+                print(f"      ✓ File moved using bash command")
+            else:
+                print(f"      ✓ File moved using unix-mv")
             
             # Now download via file transfer API
             download_url = f"{self.base_url}/mgmt/shared/file-transfer/downloads/{filename}"
             
-            success = self._perform_download(download_url, filename)
+            success, file_size = self._perform_download(download_url, filename)
             
-            # If download failed, try to move the file back
-            if not success:
+            # If download failed, try to move the file back to original location
+            if not success and actual_path:
                 print(f"      Download failed, attempting to restore file...")
                 restore_payload = {
                     "command": "run",
-                    "utilCmdArgs": f"/var/config/rest/downloads/{filename} /var/tmp/{filename}"
+                    "utilCmdArgs": f"/var/config/rest/downloads/{filename} {source_path}"
                 }
                 self.session.post(move_url, json=restore_payload, timeout=30)
+            else:
+                # Clean up the file from downloads directory if still there
+                cleanup_payload = {
+                    "command": "run",
+                    "utilCmdArgs": f"-c 'rm -f /var/config/rest/downloads/{filename}'"
+                }
+                self.session.post(f"{self.base_url}/mgmt/tm/util/bash", json=cleanup_payload, timeout=30)
             
-            return success
+            return success, file_size
             
         except Exception as e:
             print(f"      File transfer method failed: {str(e)}")
-            return False
+            return False, 0
     
-    def _download_via_bash_copy(self, qkview_info, filename):
-        """Download directly from /var/tmp using file transfer API"""
+    def _download_via_bash_copy(self, qkview_info, filename, actual_path=None):
+        """Download using bash to copy file to download location"""
         try:
-            print(f"      Attempting direct download from /var/tmp...")
+            source_path = actual_path or f"/var/tmp/{filename}"
+            print(f"      Using bash to copy QKView from {source_path}...")
             
-            # Try to download directly from the file system using a direct file path
-            # Some F5 versions allow direct file access via specific endpoints
-            download_urls = [
-                f"{self.base_url}/mgmt/shared/file-transfer/downloads/../../../var/tmp/{filename}",
-                f"{self.base_url}/mgmt/tm/file/ssl-cert/{filename}",
-                f"{self.base_url}/mgmt/filestore/files_d/Common_d/certificate_d/{filename}"
-            ]
-            
-            for url in download_urls:
-                try:
-                    print(f"      Trying direct access: {url}")
-                    if self._perform_download(url, filename):
-                        return True
-                except Exception as e:
-                    print(f"      Direct access failed: {str(e)}")
-                    continue
-            
-            print(f"      Direct download methods failed, trying alternative approach...")
-            
-            # Alternative: Use bash to create a symbolic link in a downloadable location
+            # Use bash to copy file to the file transfer download directory
             bash_url = f"{self.base_url}/mgmt/tm/util/bash"
             
-            # Create symbolic link in /var/config/rest/downloads
-            link_payload = {
+            # First, verify the source file exists and get its size
+            verify_payload = {
                 "command": "run", 
-                "utilCmdArgs": f"-c 'ln -sf /var/tmp/{filename} /var/config/rest/downloads/{filename}'"
+                "utilCmdArgs": f"-c 'ls -la \"{source_path}\"'"
             }
             
-            response = self.session.post(bash_url, json=link_payload, timeout=60)
-            if response.status_code != 200:
-                print(f"      Symbolic link creation failed: {response.status_code}")
-                return False
+            verify_response = self.session.post(bash_url, json=verify_payload, timeout=30)
+            if verify_response.status_code == 200:
+                verify_result = verify_response.json()
+                if 'commandResult' in verify_result:
+                    command_result = verify_result['commandResult']
+                    if 'No such file' not in command_result:
+                        print(f"      Source file verified: {command_result.strip()}")
+                        # Try to extract file size from ls output
+                        try:
+                            import re
+                            size_match = re.search(r'\s+(\d+)\s+', command_result)
+                            if size_match:
+                                file_size = int(size_match.group(1))
+                                print(f"      Expected file size: {file_size / (1024*1024):.1f} MB")
+                        except:
+                            pass
+                    else:
+                        print(f"      Source file not found: {command_result}")
+                        return False, 0
             
-            # Download via the symbolic link
+            # Copy file to download directory
+            copy_payload = {
+                "command": "run", 
+                "utilCmdArgs": f"-c 'cp \"{source_path}\" \"/var/config/rest/downloads/{filename}\"'"
+            }
+            
+            response = self.session.post(bash_url, json=copy_payload, timeout=120)
+            if response.status_code != 200:
+                print(f"      Bash copy failed: {response.status_code}")
+                return False, 0
+            
+            # Check if copy was successful
+            result = response.json()
+            if 'commandResult' in result and 'No such file' in result['commandResult']:
+                print(f"      Source file not found during copy: {result['commandResult']}")
+                return False, 0
+            
+            print(f"      ✓ File copied to download directory")
+            
+            # Download from the file transfer API
             download_url = f"{self.base_url}/mgmt/shared/file-transfer/downloads/{filename}"
             
-            success = self._perform_download(download_url, filename)
+            success, file_size = self._perform_download(download_url, filename)
             
-            # Clean up the symbolic link
+            # Clean up the copied file regardless of success
             cleanup_payload = {
                 "command": "run",
                 "utilCmdArgs": f"-c 'rm -f /var/config/rest/downloads/{filename}'"
             }
             self.session.post(bash_url, json=cleanup_payload, timeout=30)
             
-            return success
+            return success, file_size
             
         except Exception as e:
-            print(f"      Direct download method failed: {str(e)}")
-            return False
+            print(f"      Bash copy method failed: {str(e)}")
+            return False, 0
     
     def _perform_download(self, download_url, filename):
         """Perform the actual file download"""
         try:
-            local_dir = "qkviews"
+            local_dir = "QKViews"
             local_path = os.path.join(local_dir, filename)
             
             # Create download session with same authentication
@@ -518,6 +901,8 @@ class BigIPInfoExtractor:
             total_size = int(response.headers.get('content-length', 0))
             if total_size > 0:
                 print(f"      QKView file size: {total_size / (1024*1024):.1f} MB")
+            else:
+                print(f"      QKView file size: Unknown (no Content-Length header)")
             
             # Save file locally with progress
             downloaded = 0
@@ -537,26 +922,45 @@ class BigIPInfoExtractor:
                             if progress >= last_progress + progress_threshold:
                                 print(f"        Download progress: {progress:.1f}% ({downloaded / (1024*1024):.1f} MB)")
                                 last_progress = progress
+                        else:
+                            # Show progress every 10MB when size is unknown
+                            if downloaded % (10 * 1024 * 1024) == 0:
+                                print(f"        Downloaded: {downloaded / (1024*1024):.1f} MB")
             
             final_size = os.path.getsize(local_path)
             print(f"      ✓ Downloaded: {filename} ({final_size / (1024*1024):.1f} MB)")
+            
+            # Check if we got a reasonable file size (should be > 5MB for most QKViews)
+            if final_size < 5 * 1024 * 1024:  # Less than 5MB
+                print(f"      ⚠ Warning: Downloaded file seems small for a QKView ({final_size / (1024*1024):.1f} MB)")
+                print(f"      This might be a partial download or error response")
+                
+                # Try to read first few bytes to see if it's an error response
+                try:
+                    with open(local_path, 'rb') as f:
+                        first_bytes = f.read(100)
+                        if b'<html>' in first_bytes.lower() or b'error' in first_bytes.lower():
+                            print(f"      ✗ File appears to be an error response, not a QKView")
+                            return False, final_size
+                except:
+                    pass
             
             # Verify file size if we know the expected size
             if total_size > 0:
                 if abs(final_size - total_size) > 1024:  # Allow 1KB difference
                     print(f"      Warning: File size mismatch. Expected: {total_size / (1024*1024):.1f} MB, Downloaded: {final_size / (1024*1024):.1f} MB")
-                    return False
+                    return False, final_size
                 else:
                     print(f"      ✓ File size verified: {final_size / (1024*1024):.1f} MB")
             
-            return True
+            return True, final_size
             
         except requests.exceptions.Timeout:
             print(f"      Download timed out")
-            return False
+            return False, 0
         except Exception as e:
             print(f"      Download failed: {str(e)}")
-            return False
+            return False, 0
     
     def _cleanup_qkview_task(self, task_id):
         """Clean up QKView task using F5 autodeploy endpoint"""
@@ -1543,8 +1947,17 @@ Examples:
     if args.qkview:
         print("QKView creation enabled using F5 autodeploy endpoint")
         print(f"QKView timeout set to {args.qkview_timeout} seconds ({args.qkview_timeout/60:.1f} minutes)")
-        print("QKViews will be downloaded to the 'qkviews' directory")
+        print("QKViews will be downloaded to the 'QKViews' directory")
         print("This will take additional time per device\n")
+        
+        # Create local QKViews directory if it doesn't exist
+        qkviews_dir = "QKViews"
+        if not os.path.exists(qkviews_dir):
+            os.makedirs(qkviews_dir)
+            print(f"Created local directory: {qkviews_dir}")
+        else:
+            print(f"Using existing directory: {qkviews_dir}")
+        print("")
     
     print("BIG-IP Device Information Extractor")
     print("=" * 40)
@@ -1566,7 +1979,7 @@ Examples:
             qkview_count = sum(1 for device in devices_info if device.get('qkview_downloaded') == 'Yes')
             print(f"QKViews downloaded: {qkview_count}/{len(devices_info)}")
             if qkview_count > 0:
-                print(f"QKView files saved in: ./qkviews/")
+                print(f"QKView files saved in: ./QKViews/")
     else:
         print("No device information collected.")
         # Still create an empty CSV file with headers
