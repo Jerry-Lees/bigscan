@@ -45,8 +45,47 @@ import urllib3
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Color codes for output
+class Colors:
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    MAGENTA = '\033[95m'
+    LIGHT_BLUE = '\033[38;5;117m'
+    ENDC = '\033[0m'  # End color
+    
+    @staticmethod
+    def green(text):
+        return f"{Colors.GREEN}{text}{Colors.ENDC}"
+    
+    @staticmethod
+    def yellow(text):
+        return f"{Colors.YELLOW}{text}{Colors.ENDC}"
+    
+    @staticmethod
+    def red(text):
+        return f"{Colors.RED}{text}{Colors.ENDC}"
+    
+    @staticmethod
+    def blue(text):
+        return f"{Colors.BLUE}{text}{Colors.ENDC}"
+    
+    @staticmethod
+    def cyan(text):
+        return f"{Colors.CYAN}{text}{Colors.ENDC}"
+    
+    @staticmethod
+    def magenta(text):
+        return f"{Colors.MAGENTA}{text}{Colors.ENDC}"
+    
+    @staticmethod
+    def light_blue(text):
+        return f"{Colors.LIGHT_BLUE}{text}{Colors.ENDC}"
+
 class BigIPInfoExtractor:
-    def __init__(self, host, username, password, create_qkview=False, qkview_timeout=1200):
+    def __init__(self, host, username, password, create_qkview=False, qkview_timeout=1200, verbose=False):
         """Initialize connection to BIG-IP device"""
         self.host = host
         self.username = username
@@ -59,6 +98,7 @@ class BigIPInfoExtractor:
         self.create_qkview = create_qkview
         self.qkview_timeout = qkview_timeout
         self.token_timeout = 1200  # 20 minutes default token timeout
+        self.verbose = verbose
         
     def get_auth_token(self):
         """Get authentication token from BIG-IP"""
@@ -177,8 +217,9 @@ class BigIPInfoExtractor:
     def create_and_download_qkview(self):
         """Create QKView on remote device and download it using enhanced F5 autodeploy endpoint"""
         try:
-            print("  Creating QKView using F5 autodeploy endpoint...")
-            print(f"  QKView timeout configured for: {self.qkview_timeout} seconds ({self.qkview_timeout/60:.1f} minutes)")
+            if not self.verbose:
+                print("  Creating QKView using F5 autodeploy endpoint...")
+                print(f"  QKView timeout configured for: {self.qkview_timeout} seconds ({self.qkview_timeout/60:.1f} minutes)")
             
             # Step 1: Create QKView task
             task_id = self._create_qkview_task()
@@ -195,22 +236,25 @@ class BigIPInfoExtractor:
             # Step 3: Download QKView
             download_result, downloaded_file_size = self._download_qkview(qkview_info)
             if download_result:
-                print(f"  ✓ QKView downloaded successfully")
+                print(f"  {Colors.green('✓')} QKView downloaded successfully")
                 
-                # Step 4: Cleanup only after successful download verification
+                # Step 4: Cleanup DISABLED for debugging - files left on remote system
                 filename = qkview_info.get('name')
                 if filename and downloaded_file_size > 5 * 1024 * 1024:  # Only cleanup if > 5MB
-                    print(f"  Cleaning up remote files after successful download verification...")
-                    self._cleanup_qkview_file(filename)
-                    self._cleanup_qkview_task(task_id)
+                    print(f"  {Colors.yellow('ℹ Cleanup disabled - remote files left for comparison')}")
+                    print(f"  Remote QKView file: /var/tmp/qkviews/{filename}")
+                    # Cleanup disabled for debugging
+                    # self._cleanup_qkview_file(filename)
+                    # self._cleanup_qkview_task(task_id)
                 elif filename:
-                    print(f"  ⚠ Skipping cleanup due to small file size - may indicate incomplete download")
+                    print(f"  {Colors.yellow('⚠')} Small file size - cleanup disabled for debugging")
+                    print(f"  Remote QKView file: /var/tmp/qkviews/{filename}")
                 
                 return True
             else:
                 print("  ✗ Failed to download QKView")
                 # Don't cleanup if download failed - leave files for debugging
-                print(f"  ℹ Leaving remote files for debugging since download failed")
+                print(f"  {Colors.yellow('ℹ Remote files left for debugging since download failed')}")
                 return False
                 
         except Exception as e:
@@ -241,18 +285,21 @@ class BigIPInfoExtractor:
             qkview_payload = {"name": qkview_name}
             
             print(f"    Creating QKView task: {qkview_name}")
-            print(f"    F5 will save to: /var/tmp/{qkview_name}")
-            print(f"    Payload being sent: {json.dumps(qkview_payload)}")
+            print(f"    The BIG-IP will save to: /var/tmp/{qkview_name} on the BIG-IP")
+            if self.verbose:
+                print(f"    Payload being sent: {json.dumps(qkview_payload)}")
             
             # Submit QKView creation request (asynchronous)
             try:
-                print(f"    Sending POST to: {qkview_url}")
+                if self.verbose:
+                    print(f"    Sending POST to: {qkview_url}")
                 response = self.session.post(
                     qkview_url,
                     json=qkview_payload,
                     timeout=30  # Quick timeout for task creation
                 )
-                print(f"    Response status: {response.status_code}")
+                if self.verbose:
+                    print(f"    Response status: {response.status_code}")
                 
             except requests.exceptions.Timeout:
                 print(f"    ✗ QKView task creation timed out")
@@ -264,14 +311,15 @@ class BigIPInfoExtractor:
             if response.status_code in [200, 202]:
                 try:
                     response_data = response.json()
-                    print(f"    Raw response: {json.dumps(response_data, indent=2)}")
+                    if self.verbose:
+                        print(f"    Raw response: {json.dumps(response_data, indent=2)}")
                 except:
                     response_data = {}
                 
                 # Extract the task ID from the response
                 task_id = response_data.get('id')
                 if task_id:
-                    print(f"    QKView task created with ID: {task_id}")
+                    print(f"    {Colors.green('✓')} QKView task created with ID: {Colors.light_blue(task_id)}")
                     return task_id
                 else:
                     print(f"    ✗ No task ID found in response")
@@ -312,7 +360,7 @@ class BigIPInfoExtractor:
         """Wait for QKView task completion using F5 autodeploy endpoint"""
         try:
             print(f"    Waiting for QKView task completion...")
-            print(f"      Status check for task {task_id}")
+            print(f"      Status check for task {Colors.magenta(task_id)}")
             
             status_url = f"{self.base_url}/mgmt/cm/autodeploy/qkview/{task_id}"
             start_time = time.time()
@@ -322,6 +370,7 @@ class BigIPInfoExtractor:
             spinner_index = 0
             current_status = 'Unknown'
             current_generation = 'N/A'
+            last_printed_line = ""  # Track what we last printed to avoid duplicates
             
             while (time.time() - start_time) < self.qkview_timeout:
                 check_count += 1
@@ -336,43 +385,55 @@ class BigIPInfoExtractor:
                     current_generation = result.get('generation', 'N/A')
                     
                     if current_status == 'SUCCEEDED':
-                        print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Completed!                              ')
-                        print(f'    ✓ QKView generation completed successfully (after {elapsed}s)')
+                        print(f'\x1b[2K\r      {Colors.green("✓")} [{elapsed}s] Task Status (Generation: {current_generation}): the task completed successfully!')
+                        print(f'    {Colors.green("✓")} QKView generation completed successfully (after {elapsed}s)')
                         return result
                     
                     elif current_status == 'FAILED':
-                        print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Failed!                              ')
+                        print(f'\x1b[2K\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Failed!')
                         print(f'    ✗ QKView generation failed (after {elapsed}s)')
                         return None
                     
                     elif current_status == 'IN_PROGRESS':
-                        # Show spinning progress indicator with countdown
+                        # Show spinning progress indicator with countdown - only print when different
                         for i in range(check_interval):
                             spinner = spinner_chars[spinner_index % len(spinner_chars)]
                             remaining = check_interval - i
-                            print(f'\r      [{elapsed + i}s] Task Status (Generation: {current_generation}): {current_status} : Waiting {remaining} seconds before next check... {spinner}  ', end='', flush=True)
+                            status_line = f'      [{elapsed + i}s] Task Status (Generation: {current_generation}): {current_status} : Waiting {remaining} seconds before next check... {spinner}'
+                            
+                            # Only print if the line is different from what we printed last
+                            if status_line != last_printed_line:
+                                print(f'\x1b[2K\r{status_line}', end='', flush=True)
+                                last_printed_line = status_line
+                            
                             spinner_index += 1
                             time.sleep(1)
                     else:
-                        print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Unknown status                              ')
+                        status_line = f'      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Unknown status'
+                        if status_line != last_printed_line:
+                            print(f'\x1b[2K\r{status_line}', end='', flush=True)
+                            last_printed_line = status_line
                         time.sleep(check_interval)
                 
                 except requests.exceptions.RequestException as e:
-                    print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): ERROR : Connection failed (attempt {check_count})                              ')
+                    error_line = f'      [{elapsed}s] Task Status (Generation: {current_generation}): ERROR : Connection failed (attempt {check_count})'
+                    if error_line != last_printed_line:
+                        print(f'\x1b[2K\r{error_line}', end='', flush=True)
+                        last_printed_line = error_line
                     if check_count >= 3:
                         print(f'\n    ✗ Multiple consecutive failures, aborting')
                         return None
                     time.sleep(check_interval)
             
             elapsed = int(time.time() - start_time)
-            print(f'\r      [{elapsed}s] Task Status (Generation: {current_generation}): TIMEOUT : Exceeded {self.qkview_timeout}s limit                              ')
-            print(f'\n    ✗ QKView creation timed out after {elapsed} seconds')
+            print(f'      [{elapsed}s] Task Status (Generation: {current_generation}): TIMEOUT : Exceeded {self.qkview_timeout}s limit')
+            print(f'    ✗ QKView creation timed out after {elapsed} seconds')
             return None
             
         except Exception as e:
             elapsed = int(time.time() - start_time) if 'start_time' in locals() else 0
-            print(f'\r      [{elapsed}s] Task Status (Generation: N/A): ERROR : {str(e)}                              ')
-            print(f'\n    ✗ Error waiting for QKView completion')
+            print(f'      [{elapsed}s] Task Status (Generation: N/A): ERROR : {str(e)}')
+            print(f'    ✗ Error waiting for QKView completion')
             return None
     
     def _download_qkview(self, qkview_info):
@@ -408,13 +469,13 @@ class BigIPInfoExtractor:
                     if isinstance(result, tuple):
                         success, file_size = result
                         if success:
-                            print(f"    ✓ Download successful using {method_name}")
+                            print(f"    {Colors.green('✓')} Download successful.")
                             return True, file_size
                         else:
                             print(f"    ✗ Download failed using {method_name}")
                     elif result:
                         # Legacy method that returns boolean only
-                        print(f"    ✓ Download successful using {method_name} (legacy)")
+                        print(f"    {Colors.green('✓')} Download successful.")
                         return True, 0
                     else:
                         print(f"    ✗ Download failed using {method_name} (legacy)")
@@ -482,7 +543,8 @@ class BigIPInfoExtractor:
                     if 'commandResult' in result:
                         command_result = result['commandResult'].strip()
                         if command_result and 'No such file' not in command_result:
-                            print(f"      Pattern search results: {command_result}")
+                            if self.verbose:
+                                print(f"      Pattern search results: {command_result}")
                             # Try to extract the actual file path
                             lines = command_result.split('\n')
                             for line in lines:
@@ -509,8 +571,9 @@ class BigIPInfoExtractor:
                 print(f"      No qkviewUri found in response")
                 return False, 0
             
-            print(f"      Using F5 official chunked download method")
-            print(f"      Autodeploy URI: {qkview_uri}")
+            if self.verbose:
+                print(f"      Using F5 official chunked download method")
+                print(f"      Autodeploy URI: {qkview_uri}")
             
             # Handle localhost replacement in URI
             if 'localhost' in qkview_uri:
@@ -520,7 +583,8 @@ class BigIPInfoExtractor:
             else:
                 download_url = f"https://{self.host}{qkview_uri}"
             
-            print(f"      Download URL: {download_url}")
+            if self.verbose:
+                print(f"      Download URL: {download_url}")
             
             return self._download_chunked_f5_method(download_url, filename)
             
@@ -529,7 +593,7 @@ class BigIPInfoExtractor:
             return False, 0
     
     def _download_chunked_f5_method(self, download_url, filename):
-        """Download using F5's official chunked method from KB article K04396542"""
+        """Download using F5's official chunked method - corrected version based on K04396542"""
         try:
             local_dir = "QKViews"
             local_path = os.path.join(local_dir, filename)
@@ -577,134 +641,114 @@ class BigIPInfoExtractor:
                         return False, 0
                     
                     if resp.status_code == 200:
-                        # If the size is zero, this is the first time through the loop
-                        # and we need to figure out the total size of the file
-                        if size > 0:
-                            current_bytes += chunk_size
-                            for chunk in resp.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                            
-                            # Calculate and show progress on same line
-                            progress = (current_bytes / size) * 100
-                            chunk_display = f"(Chunk {chunk_count}/{total_chunks})" if total_chunks > 0 else f"(Chunk {chunk_count})"
-                            print(f"\r        Progress: {progress:.1f}% ({current_bytes / (1024*1024):.1f} MB / {size / (1024*1024):.1f} MB) {chunk_display}", end='', flush=True)
-                        
-                        # Once we've downloaded the entire file, break out of the loop
-                        if end == size:
-                            print(f"\n        Download complete!")
-                            break
-                        
                         # Get the Content-Range header to determine total file size
                         crange = resp.headers.get('Content-Range', '')
                         
-                        # Determine the total number of bytes to read
+                        # Determine the total number of bytes to read (F5 method)
                         if size == 0:
                             try:
+                                # F5 does: size = int(crange.split('/')[-1]) - 1
+                                # This makes size 0-based (last byte position)
                                 size = int(crange.split('/')[-1]) - 1
-                                total_chunks = (size // chunk_size) + (1 if size % chunk_size else 0)
-                                print(f"        Total file size determined: {size / (1024*1024):.1f} MB ({total_chunks} chunks)")
+                                total_chunks = ((size + 1) // chunk_size) + (1 if (size + 1) % chunk_size else 0)
+                                if self.verbose:
+                                    print(f"        Total file size determined: {size + 1} bytes ({size + 1 / (1024*1024):.1f} MB, {total_chunks} chunks)")
                                 
-                                # If the file is smaller than the chunk size, adjust
+                                # If the file is smaller than the chunk size, adjust end
                                 if chunk_size > size:
                                     end = size
-                                    continue
-                            except (ValueError, IndexError):
-                                print(f"\r        Could not determine file size from Content-Range: {crange}")
+                                    
+                            except (ValueError, IndexError) as e:
+                                print(f"\r        Could not determine file size from Content-Range: {crange}, error: {e}")
                                 return False, 0
                         
-                        # Calculate next chunk range
+                        # If the size is zero (first iteration), don't write data yet
+                        # This matches F5's logic exactly
+                        if size > 0:
+                            current_bytes += chunk_size
+                            bytes_written_this_chunk = 0
+                            for chunk in resp.iter_content(chunk_size=8192):
+                                if chunk:  # Filter out keep-alive chunks
+                                    f.write(chunk)
+                                    bytes_written_this_chunk += len(chunk)
+                            
+                            # Calculate and show progress
+                            actual_current_bytes = f.tell()
+                            progress = (actual_current_bytes / (size + 1)) * 100
+                            chunk_display = f"(Chunk {chunk_count}/{total_chunks})" if total_chunks > 0 else f"(Chunk {chunk_count})"
+                            print(f"\r        Progress: {progress:.1f}% ({actual_current_bytes / (1024*1024):.1f} MB / {(size + 1) / (1024*1024):.1f} MB) {chunk_display}", end='', flush=True)
+                        
+                        # Once we've downloaded the entire file, break out of the loop
+                        # F5 uses: if end == size:
+                        if end == size:
+                            print(f"\n        {Colors.green('✓')} Download complete!")
+                            break
+                        
+                        # Calculate next chunk range (F5 method)
                         start += chunk_size
-                        if (current_bytes + chunk_size) > size:
+                        if (current_bytes + chunk_size) > (size + 1):
                             end = size
                         else:
                             end = start + chunk_size - 1
                             
                     elif resp.status_code == 206:  # Partial Content
-                        # Handle 206 response similar to 200
-                        if size > 0:
-                            current_bytes += chunk_size
-                            for chunk in resp.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                            
-                            # Show progress
-                            progress = (current_bytes / size) * 100
-                            chunk_display = f"(Chunk {chunk_count}/{total_chunks})" if total_chunks > 0 else f"(Chunk {chunk_count})"
-                            print(f"\r        Progress: {progress:.1f}% ({current_bytes / (1024*1024):.1f} MB / {size / (1024*1024):.1f} MB) {chunk_display}", end='', flush=True)
+                        print(f"        Unexpected 206 response on what should be 200")
+                        # Handle similar to 200 but this might indicate an issue
+                        continue
                         
-                        if end == size:
-                            print(f"\n        Download complete!")
-                            break
-                            
-                        # Get total size from 206 response
-                        crange = resp.headers.get('Content-Range', '')
-                        if size == 0:
-                            try:
-                                size = int(crange.split('/')[-1]) - 1
-                                total_chunks = (size // chunk_size) + (1 if size % chunk_size else 0)
-                                print(f"        Total file size from 206: {size / (1024*1024):.1f} MB ({total_chunks} chunks)")
-                            except (ValueError, IndexError):
-                                print(f"\r        Could not determine file size from 206 Content-Range: {crange}")
-                                return False, 0
+                    elif resp.status_code == 400:
+                        print(f"\r        HTTP 400 - checking if this is expected end-of-file                              ")
                         
-                        start += chunk_size
-                        if (current_bytes + chunk_size) > size:
-                            end = size
-                        else:
-                            end = start + chunk_size - 1
-                            
-                    elif resp.status_code == 400 and end >= size:
-                        # HTTP 400 on final chunk often happens when requesting beyond file end
-                        # This is normal behavior for some F5 versions - check if we have the complete file
-                        print(f"\r        Got HTTP 400 on final chunk - checking if download is complete...")
-                        
-                        # Check if we've downloaded the expected amount
-                        current_file_size = f.tell() if hasattr(f, 'tell') else 0
+                        # Check if we're at or very near the end
+                        current_file_size = f.tell()
                         if current_file_size > 0 and size > 0:
-                            if abs(current_file_size - (size + 1)) <= 1024:  # Allow 1KB tolerance
-                                print(f"\n        Download appears complete despite HTTP 400 (got {current_file_size} bytes)")
+                            expected_size = size + 1
+                            if abs(current_file_size - expected_size) <= 1024:  # Within 1KB
+                                print(f"\n        Download appears complete despite HTTP 400")
+                                print(f"        Expected: {expected_size}, Got: {current_file_size}")
                                 break
                         
-                        # If we're very close to the end, consider it successful
-                        if end >= size * 0.99:  # Within 1% of completion
-                            print(f"\n        Download {end/size*100:.1f}% complete - treating as successful")
-                            break
-                        
-                        print(f"\r        Unexpected response code: {resp.status_code} (chunk {chunk_count})")
+                        print(f"\r        Unexpected HTTP 400 at chunk {chunk_count}                              ")
+                        print(f"\r        Current file size: {f.tell() if hasattr(f, 'tell') else 'unknown'}                              ")
+                        print(f"\r        Expected total: {size + 1 if size > 0 else 'unknown'}                              ")
                         return False, 0
-                            
+                        
                     else:
-                        print(f"\r        Unexpected response code: {resp.status_code} (chunk {chunk_count})")
-                        
-                        # Check if this is happening near the end - might still be successful
-                        if end >= size * 0.95:  # Within 5% of completion
-                            print(f"\n        Download {end/size*100:.1f}% complete - checking file integrity...")
-                            break
-                        
+                        print(f"\r        Unexpected response code: {resp.status_code}                              ")
+                        print(f"\r        Response text: {resp.text[:200]}                              ")
                         return False, 0
             
             final_size = os.path.getsize(local_path)
-            print(f"\n      ✓ F5 chunked download completed: {filename}")
-            print(f"      Final file size: {final_size / (1024*1024):.1f} MB")
+            print(f"\n      {Colors.green('✓')} F5 chunked download completed: {filename}")
+            print(f"      Final file size: {final_size} bytes ({final_size / (1024*1024):.1f} MB)")
             
-            # Verify file size matches expected (with tolerance for F5's chunked method)
+            # Verify file size matches expected
             if size > 0:
-                expected_size = size + 1  # Size is 0-based, so add 1 for actual bytes
+                expected_size = size + 1  # Convert from 0-based to actual byte count
                 size_difference = abs(final_size - expected_size)
-                tolerance = max(1024, expected_size * 0.01)  # 1KB or 1% tolerance, whichever is larger
                 
-                if size_difference <= tolerance:
-                    print(f"      ✓ File size verified: {final_size / (1024*1024):.1f} MB (within tolerance)")
+                print(f"      Expected size: {expected_size} bytes")
+                print(f"      Actual size: {final_size} bytes") 
+                if size_difference == 0:
+                    print(f"      {Colors.green('✓')} Difference: {size_difference} bytes")
+                    print(f"      {Colors.green('✓')} File size matches exactly!")
+                elif size_difference <= 1024:  # 1KB tolerance
+                    print(f"      {Colors.red('✗')} Difference: {size_difference} bytes")
+                    print(f"      {Colors.green('✓')} File size within acceptable tolerance")
                 else:
-                    print(f"      ⚠ Warning: File size mismatch. Expected: {expected_size / (1024*1024):.1f} MB, Downloaded: {final_size / (1024*1024):.1f} MB")
-                    # Don't fail if we got a reasonable file size - some F5 versions have chunking quirks
-                    if final_size >= expected_size * 0.95:  # At least 95% of expected size
-                        print(f"      ✓ File size is acceptable (95%+ of expected)")
+                    print(f"      {Colors.red('✗')} Difference: {size_difference} bytes")
+                    print(f"      {Colors.yellow('⚠')} Warning: Significant file size difference")
+                    print(f"      This may indicate a download problem")
+                    
+                    # Don't fail if we got most of the file
+                    if final_size >= expected_size * 0.95:  # At least 95%
+                        print(f"      {Colors.green('✓')} File size is acceptable (95%+ of expected)")
                     else:
                         return False, final_size
             
-            # Verify we got a reasonable file size for a QKView
-            if final_size < 1024 * 1024:  # Less than 1MB is suspicious for a QKView
-                print(f"      ⚠ Warning: File seems very small for a QKView ({final_size / (1024*1024):.1f} MB)")
+            # Basic sanity check
+            if final_size < 1024 * 1024:  # Less than 1MB is suspicious
+                print(f"      {Colors.yellow('⚠')} Warning: File seems very small for a QKView")
                 
                 # Check if it's an error response
                 try:
@@ -715,14 +759,13 @@ class BigIPInfoExtractor:
                             return False, final_size
                 except:
                     pass
-                
-                # If it's very small but looks like binary data, warn but don't fail
-                print(f"      ⚠ Proceeding despite small size - may be a minimal QKView")
             
             return True, final_size
             
         except Exception as e:
-            print(f"\n      F5 chunked download failed: {str(e)}")
+            print(f"\n      F5 chunked download failed with exception: {str(e)}")
+            import traceback
+            print(f"      Traceback: {traceback.format_exc()}")
             return False, 0
     
     def _download_via_file_transfer(self, qkview_info, filename, actual_path=None):
@@ -1005,13 +1048,14 @@ class BigIPInfoExtractor:
                 self.device_info['hostname'] = 'N/A'
             
             # Get platform info from sys/hardware
-            print("  Extracting platform information...")
+            print("    Extracting platform information...")
             hardware_data = self.api_request("sys/hardware")
             if hardware_data:
                 platform = self._extract_platform_from_hardware(hardware_data)
                 if platform:
                     self.device_info['platform'] = platform
-                    print(f"  Found platform: {platform}")
+                    if self.verbose:
+                        print(f"      Found platform: {platform}")
                 else:
                     self.device_info['platform'] = 'N/A'
             else:
@@ -1033,7 +1077,10 @@ class BigIPInfoExtractor:
             # Method 1: Look in system-info section for platform
             for entry_url, entry_data in entries.items():
                 if 'system-info' in entry_url:
-                    print(f"    Checking system-info for platform: {entry_url}")
+                    if self.verbose:
+                        print(f"      Checking system-info for platform: {entry_url}")
+                    else:
+                        print(f"      Checking system-info for platform...")
                     
                     nested_stats = entry_data.get('nestedStats', {})
                     nested_entries = nested_stats.get('entries', {})
@@ -1048,22 +1095,22 @@ class BigIPInfoExtractor:
                                 platform_info = system_entries['platform']
                                 if isinstance(platform_info, dict) and 'description' in platform_info:
                                     platform = platform_info['description']
-                                    print(f"    Found platform in system-info: {platform}")
                                     return platform
             
             return None
             
         except Exception as e:
-            print(f"    Error extracting platform: {str(e)}")
+            print(f"      Error extracting platform: {str(e)}")
             return None
     
     def get_device_serial(self):
         """Extract device serial number"""
         try:
-            print("  Searching for chassis serial number...")
+            print("    Extracting device serial number...")
             
             # Check sys/hardware directly for bigipChassisSerialNum
-            print("  Checking sys/hardware for bigipChassisSerialNum...")
+            if self.verbose:
+                print("      Checking sys/hardware for bigipChassisSerialNum...")
             hardware_data = self.api_request("sys/hardware")
             
             if hardware_data:
@@ -1071,17 +1118,17 @@ class BigIPInfoExtractor:
                 serial = self._extract_chassis_serial_from_hardware(hardware_data)
                 if serial:
                     self.device_info['serial_number'] = serial
-                    print(f"  SUCCESS: Found chassis serial: {serial}")
+                    print(f"      {Colors.green('✓')} Found chassis serial: {serial}")
                     return
                 
                 # Also try to extract bigipChassisSerialNum recursively
                 serial = self._find_bigip_chassis_serial(hardware_data)
                 if serial:
                     self.device_info['serial_number'] = serial
-                    print(f"  SUCCESS: Found bigipChassisSerialNum: {serial}")
+                    print(f"      {Colors.green('✓')} Found bigipChassisSerialNum: {serial}")
                     return
             
-            print("  Chassis serial number not found")
+            print("    Chassis serial number not found")
             self.device_info['serial_number'] = 'N/A'
             
         except Exception as e:
@@ -1099,14 +1146,16 @@ class BigIPInfoExtractor:
             
             for entry_url, entry_data in entries.items():
                 if 'system-info' in entry_url:
-                    print(f"    Found system-info entry: {entry_url}")
+                    if self.verbose:
+                        print(f"      Found system-info entry: {entry_url}")
                     
                     nested_stats = entry_data.get('nestedStats', {})
                     nested_entries = nested_stats.get('entries', {})
                     
                     for nested_url, nested_data in nested_entries.items():
                         if 'system-info/0' in nested_url:
-                            print(f"    Found system-info/0 entry: {nested_url}")
+                            if self.verbose:
+                                print(f"      Found system-info/0 entry: {nested_url}")
                             
                             system_stats = nested_data.get('nestedStats', {})
                             system_entries = system_stats.get('entries', {})
@@ -1115,13 +1164,14 @@ class BigIPInfoExtractor:
                                 chassis_serial_info = system_entries['bigipChassisSerialNum']
                                 if isinstance(chassis_serial_info, dict) and 'description' in chassis_serial_info:
                                     serial = chassis_serial_info['description']
-                                    print(f"    Found bigipChassisSerialNum: {serial}")
+                                    if self.verbose:
+                                        print(f"      Found bigipChassisSerialNum: {serial}")
                                     return serial
             
             return None
             
         except Exception as e:
-            print(f"    Error extracting chassis serial: {str(e)}")
+            print(f"      Error extracting chassis serial: {str(e)}")
             return None
     
     def _find_bigip_chassis_serial(self, data):
@@ -1148,23 +1198,25 @@ class BigIPInfoExtractor:
     def get_registration_key(self):
         """Extract registration key information"""
         try:
-            print("  Searching for registration key...")
+            print("    Searching for registration key...")
             
             # Check sys/license for registrationKey
-            print("  Checking sys/license for registration key...")
+            if self.verbose:
+                print("      Checking sys/license for registration key...")
             license_data = self.api_request("sys/license")
             
             if license_data:
-                print(f"    Searching license data for registration key...")
+                if self.verbose:
+                    print(f"        Searching license data for registration key...")
                 
                 # Look for the registration key in the structured data
                 reg_key = self._extract_registration_key_from_license(license_data)
                 if reg_key:
                     self.device_info['registration_key'] = reg_key
-                    print(f"  SUCCESS: Found registration key: {reg_key}")
+                    print(f"    {Colors.green('✓')} Found registration key: {reg_key}")
                     return
             
-            print("  Registration key not found")
+            print("    Registration key not found")
             self.device_info['registration_key'] = 'N/A'
             
         except Exception as e:
@@ -1182,7 +1234,8 @@ class BigIPInfoExtractor:
             
             for entry_url, entry_data in entries.items():
                 if 'license/0' in entry_url or 'license' in entry_url:
-                    print(f"    Found license entry: {entry_url}")
+                    if self.verbose:
+                        print(f"      Found license entry: {entry_url}")
                     
                     nested_stats = entry_data.get('nestedStats', {})
                     nested_entries = nested_stats.get('entries', {})
@@ -1190,18 +1243,20 @@ class BigIPInfoExtractor:
                     # Look for registrationKey field
                     for field_name, field_data in nested_entries.items():
                         if 'registrationkey' in field_name.lower() or 'registration' in field_name.lower():
-                            print(f"    Found registration field: {field_name}")
+                            if self.verbose:
+                                print(f"      Found registration field: {field_name}")
                             
                             if isinstance(field_data, dict) and 'description' in field_data:
                                 reg_key = field_data['description']
                                 if reg_key and reg_key.strip() and reg_key != '-':
-                                    print(f"    Registration key value: {reg_key}")
+                                    if self.verbose:
+                                        print(f"      Registration key value: {reg_key}")
                                     return reg_key.strip()
             
             return None
             
         except Exception as e:
-            print(f"    Error extracting registration key: {str(e)}")
+            print(f"      Error extracting registration key: {str(e)}")
             return None
     
     def get_software_version(self):
@@ -1211,11 +1266,11 @@ class BigIPInfoExtractor:
             available_versions = []
             
             # Try sys/software/volume for boot locations
-            print("  Checking sys/software/volume for boot locations...")
+            print("    Checking for boot locations...")
             volume_data = self.api_request("sys/software/volume")
             
             if volume_data and 'items' in volume_data:
-                print(f"  Found {len(volume_data['items'])} boot locations")
+                print(f"    Found {len(volume_data['items'])} boot locations")
                 
                 for volume in volume_data['items']:
                     volume_name = volume.get('name', 'Unknown')
@@ -1230,15 +1285,16 @@ class BigIPInfoExtractor:
                         volume_info = f"{volume_name} ({volume_version})"
                     
                     available_versions.append(volume_info)
-                    print(f"    Boot location: {volume_info} {'[ACTIVE]' if is_active else ''}")
+                    print(f"      Boot location: {volume_info} {'[ACTIVE]' if is_active else ''}")
                     
                     if is_active:
                         active_version = volume_version
-                        print(f"  Active version: {active_version}")
+                        if self.verbose:
+                            print(f"    Active version: {active_version}")
             
             # Fallback: Try sys/version for TMOS version if no active version
             if active_version == 'N/A':
-                print("  Trying sys/version for TMOS info...")
+                print("    Trying sys/version for TMOS info...")
                 tmos_data = self.api_request("sys/version")
                 if tmos_data and 'entries' in tmos_data:
                     for entry_name, entry_data in tmos_data['entries'].items():
@@ -1249,17 +1305,18 @@ class BigIPInfoExtractor:
                             version_info = entries['Version'].get('description', '')
                             if version_info and version_info != 'N/A':
                                 active_version = version_info
-                                print(f"  Found version: {active_version}")
+                                if self.verbose:
+                                    print(f"    Found version: {active_version}")
                                 break
             
             # Check for additional software information
-            print("  Checking for additional software information...")
+            print("    Checking for additional software information...")
             
             self.device_info['active_version'] = active_version
             self.device_info['available_versions'] = '; '.join(available_versions) if available_versions else 'N/A'
             
-            print(f"  Final active version: {active_version}")
-            print(f"  Total available versions/locations: {len(available_versions)}")
+            print(f"    Active Boot Location Version: {active_version}")
+            print(f"    Available Boot Locations: {len(available_versions)}")
             
         except Exception as e:
             print(f"Error getting software version: {str(e)}")
@@ -1286,6 +1343,11 @@ class BigIPInfoExtractor:
                     if any(keyword in hotfix_name.lower() for keyword in ['emergency', 'critical', 'hotfix', 'ehf']):
                         emergency_hotfixes.append(hotfix_info)
             
+            if hotfix_list:
+                print(f"      Found {len(hotfix_list)} hotfix(es)")
+            else:
+                print(f"      {Colors.green('No hotfixes found')}")
+            
             self.device_info['installed_hotfixes'] = '; '.join(hotfix_list) if hotfix_list else 'None'
             self.device_info['emergency_hotfixes'] = '; '.join(emergency_hotfixes) if emergency_hotfixes else 'None'
             
@@ -1298,26 +1360,26 @@ class BigIPInfoExtractor:
         """Extract additional useful information"""
         try:
             # System clock/time - improved
-            print("  Getting system time...")
+            print("    Getting system time...")
             self._get_system_time_improved()
             
             # Memory information - improved
-            print("  Getting memory information...")
+            print("    Getting memory information...")
             self._get_memory_info_improved()
             
             # CPU information
-            print("  Getting CPU information...")
+            print("    Getting CPU information...")
             cpu_data = self.api_request("sys/cpu")
             if cpu_data and 'entries' in cpu_data:
                 cpu_count = len(cpu_data['entries'])
                 self.device_info['cpu_count'] = cpu_count
-                print(f"    Found {cpu_count} CPU entries")
+                print(f"      Found {cpu_count} CPU entries")
             else:
                 self.device_info['cpu_count'] = 'N/A'
-                print("    CPU data not available")
+                print("      CPU data not available")
             
             # HA status - improved
-            print("  Getting HA status...")
+            print("    Getting HA status...")
             self._get_ha_status_improved()
             
             # Management IP
@@ -1349,7 +1411,7 @@ class BigIPInfoExtractor:
                     formatted_time = self._format_system_time(raw_time)
                     if formatted_time != 'N/A':
                         self.device_info['system_time'] = formatted_time
-                        print(f"    Found system time: {formatted_time}")
+                        print(f"      Found system time: {formatted_time}")
                         return
         
         # Method 2: Try getting from sys/global-settings
@@ -1360,12 +1422,12 @@ class BigIPInfoExtractor:
                 from datetime import datetime
                 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 self.device_info['system_time'] = current_time
-                print(f"    Using local timestamp: {current_time}")
+                print(f"      Using local timestamp: {current_time}")
                 return
         except:
             pass
         
-        print("    Could not determine system time")
+        print("      Could not determine system time")
     
     def _get_memory_info_improved(self):
         """Improved memory information extraction with better fallbacks"""
@@ -1377,7 +1439,8 @@ class BigIPInfoExtractor:
         })
         
         # Method 1: Try sys/tmm-info for TMM memory (this works!)
-        print("    Trying sys/tmm-info for TMM memory...")
+        if self.verbose:
+            print("      Trying sys/tmm-info for TMM memory...")
         tmm_info = self.api_request("sys/tmm-info")
         if tmm_info and 'entries' in tmm_info:
             for entry_name, entry_data in tmm_info['entries'].items():
@@ -1389,11 +1452,13 @@ class BigIPInfoExtractor:
                             if value and str(value).replace('.', '').isdigit():
                                 formatted_mem = self._format_memory_value(value)
                                 self.device_info['tmm_memory'] = formatted_mem
-                                print(f"    Found TMM memory: {formatted_mem}")
+                                if self.verbose:
+                                    print(f"      Found TMM memory: {formatted_mem}")
                                 break
         
         # Method 2: Try sys/host-info for host memory
-        print("    Trying sys/host-info for host memory...")
+        if self.verbose:
+            print("      Trying sys/host-info for host memory...")
         host_info = self.api_request("sys/host-info")
         if host_info and 'entries' in host_info:
             for entry_name, entry_data in host_info['entries'].items():
@@ -1406,14 +1471,16 @@ class BigIPInfoExtractor:
                                 formatted_mem = self._format_memory_value(value)
                                 if 'total' in field_name.lower() and self.device_info['total_memory'] == 'N/A':
                                     self.device_info['total_memory'] = formatted_mem
-                                    print(f"    Found total memory: {formatted_mem}")
+                                    if self.verbose:
+                                        print(f"      Found total memory: {formatted_mem}")
                                 elif 'used' in field_name.lower() and self.device_info['memory_used'] == 'N/A':
                                     self.device_info['memory_used'] = formatted_mem
-                                    print(f"    Found used memory: {formatted_mem}")
+                                    if self.verbose:
+                                        print(f"      Found used memory: {formatted_mem}")
         
         # Method 3: Try sys/platform for memory info
         if self.device_info['total_memory'] == 'N/A':
-            print("    Trying sys/platform for memory...")
+            print("      Trying sys/platform for memory...")
             platform_info = self.api_request("sys/platform")
             if platform_info and 'entries' in platform_info:
                 for entry_name, entry_data in platform_info['entries'].items():
@@ -1426,10 +1493,10 @@ class BigIPInfoExtractor:
                                     formatted_mem = self._format_memory_value(value)
                                     if formatted_mem != 'N/A' and self.device_info['total_memory'] == 'N/A':
                                         self.device_info['total_memory'] = formatted_mem
-                                        print(f"    Found memory in platform: {formatted_mem}")
+                                        print(f"      Found memory in platform: {formatted_mem}")
                                         break
         
-        print(f"    Memory Results: Total={self.device_info['total_memory']}, Used={self.device_info['memory_used']}, TMM={self.device_info['tmm_memory']}")
+        print(f"      Memory Results: Total={self.device_info['total_memory']}, Used={self.device_info['memory_used']}, TMM={self.device_info['tmm_memory']}")
     
     def _get_ha_status_improved(self):
         """Improved HA status detection with multiple methods"""
@@ -1441,7 +1508,7 @@ class BigIPInfoExtractor:
             if failover_data:
                 if 'status' in failover_data:
                     self.device_info['ha_status'] = failover_data['status']
-                    print(f"    Found HA status: {failover_data['status']}")
+                    print(f"      Found HA status: {failover_data['status']}")
                     return
                 elif 'entries' in failover_data:
                     for entry_name, entry_data in failover_data['entries'].items():
@@ -1453,7 +1520,7 @@ class BigIPInfoExtractor:
                                 status_value = field_data.get('description') or field_data.get('value')
                                 if status_value:
                                     self.device_info['ha_status'] = status_value
-                                    print(f"    Found HA status in entries: {status_value}")
+                                    print(f"      Found HA status in entries: {status_value}")
                                     return
         except:
             pass
@@ -1465,18 +1532,18 @@ class BigIPInfoExtractor:
                 device_count = len(device_data['items'])
                 if device_count > 1:
                     self.device_info['ha_status'] = f'Clustered ({device_count} devices)'
-                    print(f"    Found clustering: {device_count} devices")
+                    print(f"      Found clustering: {device_count} devices")
                     return
                 else:
                     self.device_info['ha_status'] = 'Standalone'
-                    print(f"    Single device detected: Standalone")
+                    print(f"      Single device detected: Standalone")
                     return
         except:
             pass
         
         # Method 3: Default to Standalone
         self.device_info['ha_status'] = 'Standalone'
-        print(f"    Using default: Standalone")
+        print(f"      Using default: Standalone")
     
     def _format_memory_value(self, memory_value):
         """Convert memory value to a readable format"""
@@ -1523,7 +1590,7 @@ class BigIPInfoExtractor:
             return mem_str
             
         except Exception as e:
-            print(f"      Error formatting memory value '{memory_value}': {str(e)}")
+            print(f"        Error formatting memory value '{memory_value}': {str(e)}")
             return str(memory_value)
     
     def _format_system_time(self, time_string):
@@ -1555,11 +1622,11 @@ class BigIPInfoExtractor:
                         dt = dt.replace(tzinfo=timezone.utc)
                         local_dt = dt.astimezone()
                         formatted_time = local_dt.strftime('%Y-%m-%d %H:%M:%S')
-                        print(f"    Converted UTC time: {time_string} -> {formatted_time} (local)")
+                        print(f"      Converted UTC time: {time_string} -> {formatted_time} (local)")
                     else:
                         # Assume it's already in local time
                         formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
-                        print(f"    Converted local time: {time_string} -> {formatted_time}")
+                        print(f"      Converted local time: {time_string} -> {formatted_time}")
                     
                     return formatted_time
                 except ValueError:
@@ -1569,7 +1636,7 @@ class BigIPInfoExtractor:
             return time_string
             
         except Exception as e:
-            print(f"    Error formatting time '{time_string}': {str(e)}")
+            print(f"      Error formatting time '{time_string}': {str(e)}")
             return time_string
     
     def extract_all_info(self):
@@ -1577,27 +1644,31 @@ class BigIPInfoExtractor:
         if not self.connect():
             return False
         
-        print("Extracting system information...")
+        print("  Extracting system information...")
         self.get_system_info()
         
-        print("Extracting device serial number...")
+        print("    Extracting device serial number...")
         self.get_device_serial()
         
-        print("Extracting registration key...")
+        print("    Extracting registration key...")
         self.get_registration_key()
         
-        print("Extracting software version...")
+        print("    Extracting software version...")
         self.get_software_version()
         
-        print("Extracting hotfix information...")
+        print("    Extracting hotfix information...")
         self.get_hotfix_info()
         
-        print("Extracting additional information...")
+        print("  Extracting additional information...")
         self.get_additional_info()
         
         # Create and download QKView if requested
         if self.create_qkview:
-            print("Creating and downloading QKView...")
+            if self.verbose:
+                print("  Creating QKView using F5 autodeploy endpoint...")
+                print(f"  QKView timeout configured for: {self.qkview_timeout} seconds ({self.qkview_timeout/60:.1f} minutes)")
+            else:
+                print("  Creating and downloading QKView...")
             qkview_success = self.create_and_download_qkview()
             self.device_info['qkview_downloaded'] = 'Yes' if qkview_success else 'Failed'
         else:
@@ -1748,7 +1819,8 @@ def process_devices_from_file(args):
     print("=" * 50)
     
     for i, device in enumerate(devices, 1):
-        print(f"\n[{i}/{len(devices)}] Processing device: {device['ip']}")
+        device_header = f"[{i}/{len(devices)}] Processing device: {device['ip']}"
+        print(f"\n{Colors.blue(device_header)}")
         
         # Get credentials for this device
         username, password = get_credentials_for_device(args, device['username'], device['password'])
@@ -1764,12 +1836,13 @@ def process_devices_from_file(args):
             username, 
             password, 
             create_qkview=args.qkview,
-            qkview_timeout=args.qkview_timeout
+            qkview_timeout=args.qkview_timeout,
+            verbose=args.verbose
         )
         
         if extractor.extract_all_info():
             devices_info.append(extractor.device_info)
-            print(f"  ✓ Successfully extracted information from {device['ip']}")
+            print(f"  {Colors.green('✓')} Successfully extracted information from {device['ip']}")
             
             # Display brief summary
             hostname = extractor.device_info.get('hostname', 'N/A')
@@ -1796,11 +1869,12 @@ def process_devices_from_file(args):
                         retry_username, 
                         retry_password,
                         create_qkview=args.qkview,
-                        qkview_timeout=args.qkview_timeout
+                        qkview_timeout=args.qkview_timeout,
+                        verbose=args.verbose
                     )
                     if extractor.extract_all_info():
                         devices_info.append(extractor.device_info)
-                        print(f"  ✓ Successfully extracted information from {device['ip']} (retry)")
+                        print(f"  {Colors.green('✓')} Successfully extracted information from {device['ip']} (retry)")
                         hostname = extractor.device_info.get('hostname', 'N/A')
                         version = extractor.device_info.get('active_version', 'N/A')
                         qkview_status = extractor.device_info.get('qkview_downloaded', 'N/A')
@@ -1831,12 +1905,13 @@ def process_devices_interactively(args):
             username, 
             password, 
             create_qkview=args.qkview,
-            qkview_timeout=args.qkview_timeout
+            qkview_timeout=args.qkview_timeout,
+            verbose=args.verbose
         )
         
         if extractor.extract_all_info():
             devices_info.append(extractor.device_info)
-            print(f"Successfully extracted information from {host}")
+            print(f"{Colors.green('✓')} Successfully extracted information from {host}")
             
             # Display summary
             print("\nDevice Summary:")
@@ -1845,7 +1920,11 @@ def process_devices_interactively(args):
             print(f"  Version: {extractor.device_info.get('active_version', 'N/A')}")
             print(f"  Emergency Hotfixes: {extractor.device_info.get('emergency_hotfixes', 'None')}")
             if args.qkview:
-                print(f"  QKView: {extractor.device_info.get('qkview_downloaded', 'N/A')}")
+                qkview_status = extractor.device_info.get('qkview_downloaded', 'N/A')
+                if qkview_status == 'Yes':
+                    print(f"  QKView: {Colors.green('✓')} {qkview_status}")
+                else:
+                    print(f"  QKView: {qkview_status}")
         else:
             print(f"Failed to extract information from {host}")
             
@@ -1864,11 +1943,12 @@ def process_devices_interactively(args):
                         username, 
                         password,
                         create_qkview=args.qkview,
-                        qkview_timeout=args.qkview_timeout
+                        qkview_timeout=args.qkview_timeout,
+                        verbose=args.verbose
                     )
                     if extractor.extract_all_info():
                         devices_info.append(extractor.device_info)
-                        print(f"Successfully extracted information from {host}")
+                        print(f"{Colors.green('✓')} Successfully extracted information from {host}")
                         
                         # Display summary
                         print("\nDevice Summary:")
@@ -1877,7 +1957,11 @@ def process_devices_interactively(args):
                         print(f"  Version: {extractor.device_info.get('active_version', 'N/A')}")
                         print(f"  Emergency Hotfixes: {extractor.device_info.get('emergency_hotfixes', 'None')}")
                         if args.qkview:
-                            print(f"  QKView: {extractor.device_info.get('qkview_downloaded', 'N/A')}")
+                            qkview_status = extractor.device_info.get('qkview_downloaded', 'N/A')
+                            if qkview_status == 'Yes':
+                                print(f"  QKView: {Colors.green('✓')} {qkview_status}")
+                            else:
+                                print(f"  QKView: {qkview_status}")
                     else:
                         print(f"Authentication failed again for {host}")
         
@@ -1931,6 +2015,9 @@ Examples:
     parser.add_argument('--no-qkview',
                        action='store_true',
                        help='Disable QKView creation (default behavior)')
+    parser.add_argument('-vvv', '--verbose',
+                       action='store_true',
+                       help='Enable verbose debug output')
     
     args = parser.parse_args()
     
