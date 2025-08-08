@@ -1,4 +1,4 @@
-# BIG-IP Device Information Extractor
+# BIG-IP Device Information Extractor - Modular Version
 
 A comprehensive Python script for extracting detailed system information from F5 BIG-IP devices via REST API. This tool connects to BIG-IP devices and extracts hardware, software, licensing, and configuration information, exporting the data to CSV format for analysis and reporting.
 
@@ -7,12 +7,39 @@ A comprehensive Python script for extracting detailed system information from F5
 - **Comprehensive Data Extraction**: Hostname, serial number, registration key, software version, hotfixes, platform info, and more
 - **Enhanced QKView Generation**: Creates and downloads QKView diagnostic files using F5's official autodeploy endpoint
 - **Real-time Progress Monitoring**: Live status updates with spinning progress indicators during QKView creation
+- **Multi-line Progress Display**: Terminal width-agnostic progress that works in any window size
+- **Flexible Remote Cleanup**: Optional cleanup of remote QKView files with `--no-delete` flag for debugging
 - **Bulk Processing**: Process multiple devices from CSV input file
 - **Flexible Authentication**: Command line credentials, interactive prompts, or CSV-based authentication
 - **Token-Based Authentication**: Uses BIG-IP REST API with secure token authentication and automatic timeout extension
 - **CSV Export**: Structured output for easy analysis and reporting
-- **Automatic Cleanup**: Removes temporary files and tasks from BIG-IP devices after processing
+- **Modular Architecture**: Clean, maintainable code structure with separate modules
 - **Cross-Platform**: Works on Linux, macOS, and Windows
+
+## Modular Architecture
+
+This version has been refactored into a modular structure for better maintainability:
+
+```
+bigscan/
+├── bigscan.py                 # Main entry point script
+├── modules/                   # Module package directory
+│   ├── __init__.py           # Package initialization
+│   ├── colors.py             # Color utilities for console output
+│   ├── auth_handler.py       # Authentication handling utilities
+│   ├── csv_handler.py        # CSV file reading/writing utilities
+│   ├── device_processor.py   # Device processing logic
+│   ├── bigip_extractor.py    # Main BIG-IP information extraction
+│   └── qkview_handler.py     # QKView creation and download handling
+├── QKViews/                  # Directory for downloaded QKView files (created automatically)
+└── README.md                 # This file
+```
+
+### Module Benefits
+- **Maintainability**: Each module has a single responsibility
+- **Reusability**: Components can be used independently or in other projects
+- **Testability**: Individual modules can be unit tested
+- **Extensibility**: Easy to add new features without modifying existing code
 
 ## License
 
@@ -58,6 +85,9 @@ python bigscan.py --user admin
 # Include QKView generation
 python bigscan.py --user admin --qkview
 
+# Include QKView generation without remote cleanup (debugging)
+python bigscan.py --user admin --qkview --no-delete
+
 # Bulk processing from CSV file
 python bigscan.py --in test_devices.csv --out results.csv
 ```
@@ -69,6 +99,7 @@ python bigscan.py --in test_devices.csv --out results.csv
 | File | Description | Purpose |
 |------|-------------|---------|
 | `bigscan.py` | Main scanner script | Extracts device information and creates QKViews |
+| `modules/*.py` | Modular components | Individual functionality modules |
 | `install.sh` | Installation and test script | Sets up dependencies and validates installation |
 | `README.md` | Documentation | This file - complete usage guide |
 
@@ -143,11 +174,17 @@ The script can create and download QKView diagnostic files using F5's official a
 # Single device with QKView
 python bigscan.py --user admin --qkview
 
+# QKView without remote cleanup (for debugging)
+python bigscan.py --user admin --qkview --no-delete
+
 # Bulk processing with QKView generation
 python bigscan.py --in devices.csv --qkview --out results.csv
 
 # QKView with custom timeout (20 minutes)
 python bigscan.py --user admin --qkview --qkview-timeout 1200
+
+# Verbose QKView operation for troubleshooting
+python bigscan.py --user admin --qkview -vvv
 ```
 
 ### Bulk Processing
@@ -161,6 +198,9 @@ python bigscan.py --in devices.csv --user admin --out audit_results.csv
 
 # Complete bulk processing with QKView
 python bigscan.py --in devices.csv --user admin --qkview --out full_audit.csv
+
+# Bulk QKView with debugging (no remote cleanup)
+python bigscan.py --in devices.csv --user admin --qkview --no-delete --out debug_audit.csv
 ```
 
 ## Command Line Options
@@ -176,9 +216,20 @@ python bigscan.py --in devices.csv --user admin --qkview --out full_audit.csv
 | `--qkview` | `-q` | Create and download QKView files | `--qkview` |
 | `--qkview-timeout` | | QKView creation timeout (seconds) | `--qkview-timeout 1200` |
 | `--no-qkview` | | Explicitly disable QKView creation | `--no-qkview` |
+| `--no-delete` | | Do not delete QKView files from remote system | `--no-delete` |
+| `--verbose` | `-vvv` | Enable verbose debug output | `-vvv` |
 | `--help` | `-h` | Show help message | `--help` |
 
 **Security Note**: Using `--pass` in command line is not recommended as passwords may be visible in process lists and command history.
+
+### QKView Options Explained
+
+| Option | Behavior | Use Case |
+|--------|----------|----------|
+| Default | Downloads QKView and cleans up remote files | Production use |
+| `--no-delete` | Downloads QKView but leaves files on BIG-IP | Debugging, troubleshooting |
+| `--qkview-timeout` | Custom timeout for QKView creation | Large systems, slow devices |
+| `-vvv` | Detailed debug output during QKView process | Troubleshooting QKView issues |
 
 ### Installation Script (`install.sh`)
 
@@ -250,10 +301,20 @@ QKView is F5's diagnostic file format that contains comprehensive system informa
 ### QKView Features
 - **F5 Autodeploy Endpoint**: Uses the official `/mgmt/cm/autodeploy/qkview` endpoint
 - **Asynchronous Processing**: Monitors task completion with real-time progress
+- **Multi-line Progress Display**: Terminal width-agnostic progress indicators that work in any window size
 - **Automatic Download**: Downloads completed QKViews to local `QKViews/` directory
-- **Cleanup**: Automatically removes temporary files from BIG-IP devices
+- **Configurable Cleanup**: Automatically removes temporary files from BIG-IP devices (can be disabled with `--no-delete`)
 - **Progress Indicators**: Shows spinning progress and countdown timers
 - **Error Handling**: Comprehensive error handling and recovery
+- **Chunked Downloads**: Efficient F5-standard chunked download method
+
+### QKView Remote File Management
+- **Default Behavior**: Downloads QKView and automatically cleans up remote files
+- **Debug Mode**: Use `--no-delete` to preserve remote files for troubleshooting
+- **Safety Features**: 
+  - No cleanup if download fails
+  - No cleanup if file size is suspiciously small (< 5MB)
+  - Clear messaging about cleanup status
 
 ### QKView File Naming
 QKView files are named using the format: `{hostname}_{timestamp}.qkview`
@@ -278,6 +339,9 @@ python bigscan.py
 
 # Single device with QKView
 python bigscan.py --user admin --qkview
+
+# Debug QKView (keep remote files)
+python bigscan.py --user admin --qkview --no-delete -vvv
 ```
 
 ### Production Examples
@@ -286,7 +350,7 @@ python bigscan.py --user admin --qkview
 # Weekly audit with timestamp
 python bigscan.py --in production_devices.csv --out audit_$(date +%Y%m%d).csv
 
-# Department-specific scan with QKView
+# Department-specific scan with QKView and cleanup
 python bigscan.py --in datacenter_devices.csv --user audit_account --qkview --out datacenter_audit.csv
 
 # Emergency hotfix check
@@ -294,6 +358,9 @@ python bigscan.py --in critical_devices.csv --out hotfix_status.csv
 
 # Complete audit with QKView and extended timeout
 python bigscan.py --in all_devices.csv --qkview --qkview-timeout 1800 --out complete_audit.csv
+
+# Debug audit (keep remote files for analysis)
+python bigscan.py --in problem_devices.csv --qkview --no-delete -vvv --out debug_audit.csv
 ```
 
 ### Bulk Processing Examples
@@ -311,8 +378,11 @@ EOF
 # Process all devices
 python bigscan.py --in devices.csv --user fallback_admin --out results.csv
 
-# With QKView generation
+# With QKView generation and cleanup
 python bigscan.py --in devices.csv --user fallback_admin --qkview --out results.csv
+
+# Debug mode with verbose output
+python bigscan.py --in devices.csv --user fallback_admin --qkview --no-delete -vvv --out debug_results.csv
 ```
 
 ## Troubleshooting
@@ -349,8 +419,19 @@ ls -la QKViews/
 # Increase QKView timeout
 python bigscan.py --user admin --qkview --qkview-timeout 1800
 
+# Debug QKView with verbose output and no cleanup
+python bigscan.py --user admin --qkview --no-delete -vvv
+
 # Check available disk space
 df -h
+```
+
+#### Progress Display Issues
+```bash
+# If progress lines are scrolling instead of updating in place:
+# 1. Expand terminal window width
+# 2. The script automatically handles narrow terminals with multi-line clearing
+# 3. Use -vvv for detailed troubleshooting output
 ```
 
 #### Network/API Issues
@@ -372,15 +453,16 @@ telnet your-bigip-ip 443
 | `Module not found` | Missing dependencies | Run `./install.sh --python-only` |
 | `File not found` | Missing input CSV | Check file path and permissions |
 | `Permission denied` | Insufficient permissions | Check file/directory permissions |
+| `Cleanup disabled by --no-delete` | Expected behavior | Remove `--no-delete` flag for normal cleanup |
 
 ### Debug Information
 
 The script provides detailed progress information:
 - Authentication status
 - API call results
-- QKView creation progress
-- Download status
-- Cleanup operations
+- QKView creation progress with multi-line display
+- Download status with chunked progress
+- Cleanup operations (or notification when disabled)
 
 ## System Requirements
 
@@ -422,6 +504,12 @@ The script provides detailed progress information:
 - **Firewall**: Ensure port 443 access to BIG-IP management interface
 - **Token Timeout**: Automatic token extension for long-running operations
 
+### QKView Security
+- **Remote Cleanup**: By default, removes QKView files from BIG-IP after download
+- **Debug Mode**: Use `--no-delete` only when needed for troubleshooting
+- **File Permissions**: Downloaded QKViews stored with appropriate local permissions
+- **Cleanup Verification**: Script verifies successful download before cleanup
+
 ### Best Practices
 1. Use service accounts with minimal required permissions
 2. Store credential CSV files securely with restricted permissions (chmod 600)
@@ -430,6 +518,8 @@ The script provides detailed progress information:
 5. Audit script usage and output file access
 6. Use QKView functionality only when needed (admin permissions required)
 7. Monitor QKView file storage and cleanup
+8. Use `--no-delete` only for debugging purposes
+9. Remove old QKView files from local storage when no longer needed
 
 ## Development
 
@@ -453,15 +543,19 @@ python bigscan.py --help
 
 # Test QKView functionality
 python bigscan.py --user admin --qkview
+
+# Test QKView debugging mode
+python bigscan.py --user admin --qkview --no-delete -vvv
 ```
 
 ### Code Structure
 The script is modular and can be extended:
 - **BigIPInfoExtractor class**: Core device information extraction
-- **QKView methods**: Enhanced QKView functionality using F5 autodeploy endpoint
-- **CSV handling**: Input/output CSV processing
-- **Authentication**: Token-based authentication with session management
-- **Progress reporting**: Real-time status updates with visual indicators
+- **QKViewHandler class**: Enhanced QKView functionality using F5 autodeploy endpoint
+- **CSV handling modules**: Input/output CSV processing
+- **Authentication modules**: Token-based authentication with session management
+- **Progress reporting**: Real-time status updates with terminal-agnostic visual indicators
+- **Device processing**: Bulk and interactive device handling
 
 ## Performance Considerations
 
@@ -470,12 +564,14 @@ The script is modular and can be extended:
 - **Storage**: QKView files typically 50-500MB each
 - **Memory**: Minimal memory usage with streaming downloads
 - **Concurrent**: Process devices sequentially to avoid overwhelming BIG-IP
+- **Progress Display**: Efficient multi-line clearing works in any terminal width
 
 ### Bulk Processing
 - **Scaling**: Can handle hundreds of devices with proper timeout settings
 - **Rate Limiting**: Built-in delays prevent API overload
 - **Error Handling**: Continues processing remaining devices on individual failures
 - **Progress Tracking**: Real-time progress indicators for long operations
+- **Cleanup Efficiency**: Automatic remote file cleanup reduces BIG-IP storage usage
 
 ## Support
 
@@ -483,12 +579,20 @@ For issues and questions:
 1. Check the troubleshooting section above
 2. Run the installation test script: `./install.sh --test-only`
 3. Use interactive mode for debugging: `python bigscan.py`
-4. Check F5 documentation for REST API changes
-5. Verify network connectivity and permissions
+4. Use verbose mode for detailed output: `python bigscan.py -vvv`
+5. Check F5 documentation for REST API changes
+6. Verify network connectivity and permissions
 
 ## Changelog
 
-### Version 2.0 (Current)
+### Version 2.1 (Current)
+- **Modular Architecture**: Refactored into clean, maintainable modules
+- **Enhanced Progress Display**: Multi-line clearing for terminal width independence
+- **Configurable Remote Cleanup**: Added `--no-delete` option for debugging
+- **Improved QKView Handling**: Better error handling and progress reporting
+- **Verbose Debug Mode**: Added `-vvv` flag for detailed troubleshooting output
+
+### Version 2.0 (Previous)
 - Enhanced QKView functionality using F5 autodeploy endpoint
 - Real-time progress monitoring with spinning indicators
 - Improved error handling and recovery
@@ -504,6 +608,6 @@ For issues and questions:
 
 ---
 
-**Last Updated**: July 2025  
-**Version**: 2.0  
+**Last Updated**: January 2025  
+**Version**: 2.1  
 **Tested with**: TMOS 16.1.x, 17.1.x, Python 3.7-3.12
