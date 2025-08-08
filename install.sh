@@ -8,6 +8,7 @@
 # for new installations on Linux/macOS systems.
 #
 # Enhanced for improved QKView functionality with F5 autodeploy endpoints
+# Updated for modular architecture with enhanced features
 #
 # Usage:
 #   chmod +x install.sh
@@ -123,6 +124,50 @@ check_command() {
     else
         return 1
     fi
+}
+
+check_modular_structure() {
+    print_header "Checking Modular Structure"
+    
+    # Check if modules directory exists
+    if [[ -d "modules" ]]; then
+        print_success "modules/ directory found"
+    else
+        print_error "modules/ directory not found"
+        print_info "This script requires the modular version of bigscan"
+        print_info "Please ensure the modules/ directory is present"
+        exit 1
+    fi
+    
+    # Check for required module files
+    local required_modules=(
+        "modules/__init__.py"
+        "modules/colors.py"
+        "modules/auth_handler.py"
+        "modules/csv_handler.py"
+        "modules/device_processor.py"
+        "modules/bigip_extractor.py"
+        "modules/qkview_handler.py"
+    )
+    
+    local missing_modules=()
+    
+    for module in "${required_modules[@]}"; do
+        if [[ -f "$module" ]]; then
+            print_success "Found: $module"
+        else
+            print_error "Missing: $module"
+            missing_modules+=("$module")
+        fi
+    done
+    
+    if [[ ${#missing_modules[@]} -gt 0 ]]; then
+        print_error "Missing ${#missing_modules[@]} required module files"
+        print_info "Please ensure all module files are present"
+        exit 1
+    fi
+    
+    print_success "All required modules found"
 }
 
 install_python() {
@@ -364,6 +409,9 @@ check_prerequisites() {
         print_info "Please ensure $SCRIPT_NAME is in the current directory"
         exit 1
     fi
+    
+    # Check modular structure
+    check_modular_structure
 }
 
 setup_virtual_environment() {
@@ -620,12 +668,12 @@ EOF
     print_success "Created test CSV file: $test_csv"
     print_info "Edit $test_csv with real device information for testing"
     
-    # Create enhanced test script
+    # Create enhanced test script for modular version
     local test_script="test_scanner.py"
     cat > "$test_script" << 'EOF'
 #!/usr/bin/env python3
 """
-Enhanced Test script for BIG-IP Device Information Extractor
+Enhanced Test script for BIG-IP Device Information Extractor (Modular Version)
 Tests both basic functionality and enhanced QKView features
 """
 
@@ -666,6 +714,39 @@ def test_imports():
     
     return success
 
+def test_modular_structure():
+    """Test that the modular structure is present and importable"""
+    print("\nTesting modular structure...")
+    
+    required_modules = [
+        'modules.colors',
+        'modules.auth_handler', 
+        'modules.csv_handler',
+        'modules.device_processor',
+        'modules.bigip_extractor',
+        'modules.qkview_handler'
+    ]
+    
+    success = True
+    
+    # Check if modules directory exists
+    if not os.path.exists('modules'):
+        print("  ✗ modules/ directory not found")
+        return False
+    else:
+        print("  ✓ modules/ directory found")
+    
+    # Check if modules can be imported
+    for module in required_modules:
+        try:
+            importlib.import_module(module)
+            print(f"  ✓ {module}")
+        except ImportError as e:
+            print(f"  ✗ {module}: {e}")
+            success = False
+    
+    return success
+
 def test_script_syntax():
     """Test that the main script has valid syntax"""
     print("\nTesting script syntax...")
@@ -701,11 +782,11 @@ def test_script_import():
         spec.loader.exec_module(module)
         print("  ✓ Script imports successfully")
         
-        # Test if BigIPInfoExtractor class exists
-        if hasattr(module, 'BigIPInfoExtractor'):
-            print("  ✓ BigIPInfoExtractor class found")
+        # Test main function exists
+        if hasattr(module, 'main'):
+            print("  ✓ main function found")
         else:
-            print("  ✗ BigIPInfoExtractor class not found")
+            print("  ✗ main function not found")
             return False
         
         return True
@@ -731,6 +812,18 @@ def test_help_command():
                     print("  ✓ QKView options found in help")
                 else:
                     print("  ⚠ QKView options not found in help")
+                
+                # Check for --no-delete option
+                if '--no-delete' in result.stdout:
+                    print("  ✓ --no-delete option found in help")
+                else:
+                    print("  ⚠ --no-delete option not found in help")
+                
+                # Check for verbose option
+                if '--verbose' in result.stdout or '-vvv' in result.stdout:
+                    print("  ✓ Verbose option found in help")
+                else:
+                    print("  ⚠ Verbose option not found in help")
                 
                 return True
             else:
@@ -782,21 +875,18 @@ def test_csv_functionality():
             f.write("10.0.0.1,user,\n")
             temp_csv = f.name
         
-        # Test if the script can read CSV (import the function)
-        spec = importlib.util.spec_from_file_location("bigscan", "bigscan.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        
-        if hasattr(module, 'read_devices_from_csv'):
-            devices = module.read_devices_from_csv(temp_csv)
+        # Test if the script can read CSV (import the CSV handler module)
+        try:
+            from modules.csv_handler import read_devices_from_csv
+            devices = read_devices_from_csv(temp_csv)
             if len(devices) == 2:
                 print("  ✓ CSV reading functionality works")
                 result = True
             else:
                 print(f"  ✗ Expected 2 devices, got {len(devices)}")
                 result = False
-        else:
-            print("  ✗ read_devices_from_csv function not found")
+        except ImportError:
+            print("  ✗ modules.csv_handler not found")
             result = False
         
         # Clean up
@@ -809,11 +899,12 @@ def test_csv_functionality():
 
 def main():
     """Run all tests"""
-    print("Enhanced BIG-IP Scanner Test Suite")
-    print("=" * 50)
+    print("Enhanced BIG-IP Scanner Test Suite (Modular Version)")
+    print("=" * 60)
     
     tests = [
         test_imports,
+        test_modular_structure,
         test_script_syntax,
         test_script_import,
         test_help_command,
@@ -831,12 +922,16 @@ def main():
     print(f"\nTest Results: {passed}/{total} tests passed")
     
     if passed == total:
-        print("✓ All tests passed! The enhanced BIG-IP scanner is ready to use.")
+        print("✓ All tests passed! The enhanced modular BIG-IP scanner is ready to use.")
         print("\nFeatures available:")
+        print("  • Modular architecture for better maintainability")
         print("  • Device information extraction")
         print("  • Enhanced QKView generation with F5 autodeploy endpoint")
+        print("  • Multi-line progress display (terminal width agnostic)")
+        print("  • Configurable remote cleanup with --no-delete option")
         print("  • Bulk processing from CSV files")
         print("  • Interactive and automated modes")
+        print("  • Verbose debug mode with -vvv option")
         return 0
     else:
         print("✗ Some tests failed. Please check the installation.")
@@ -847,7 +942,7 @@ if __name__ == "__main__":
 EOF
     
     chmod +x "$test_script"
-    print_success "Created enhanced test script: $test_script"
+    print_success "Created enhanced test script for modular version: $test_script"
 }
 
 run_tests() {
@@ -884,7 +979,7 @@ show_usage_examples() {
     print_header "Usage Examples"
     
     cat << 'EOF'
-The enhanced BIG-IP scanner is now ready to use! Here are some examples:
+The enhanced modular BIG-IP scanner is now ready to use! Here are some examples:
 
 # Interactive mode
 python bigscan.py
@@ -898,11 +993,17 @@ python bigscan.py --in test_devices.csv --out results.csv
 # Enhanced QKView functionality using F5 autodeploy endpoint
 python bigscan.py --in test_devices.csv --qkview --out results.csv
 
-# QKView with custom timeout (20 minutes)
+# QKView with custom timeout (20 minutes) 
 python bigscan.py --user admin --qkview --qkview-timeout 1200
 
-# Complete example with QKView
-python bigscan.py --user admin --pass mypassword --qkview --out devices.csv
+# QKView without remote cleanup (debugging mode)
+python bigscan.py --user admin --qkview --no-delete
+
+# Verbose mode for detailed troubleshooting
+python bigscan.py --user admin --qkview -vvv
+
+# Complete example with all options
+python bigscan.py --user admin --pass mypassword --qkview --no-delete -vvv --out devices.csv
 
 EOF
 
@@ -920,11 +1021,15 @@ EOF
     fi
 
     cat << 'EOF'
-Enhanced Features:
+Enhanced Features (Modular Version):
+• Modular architecture with separate modules for each function
 • F5 autodeploy endpoint for reliable QKView generation
+• Multi-line progress display that works in any terminal width
 • Real-time progress monitoring with spinning indicators
-• Automatic cleanup of remote QKView tasks
+• Configurable remote cleanup (--no-delete for debugging)
+• Automatic cleanup of remote QKView tasks and files
 • Enhanced error handling and recovery
+• Verbose debug mode (-vvv) for troubleshooting
 • Improved session management with token extension
 EOF
     
@@ -932,7 +1037,9 @@ EOF
     if [[ -d "$VENV_NAME" ]]; then
         print_info "Remember to activate the virtual environment: source $VENV_NAME/bin/activate"
     fi
-    print_info "QKView files will be saved to the 'qkviews' directory"
+    print_info "QKView files will be saved to the 'QKViews' directory"
+    print_info "Use --no-delete to preserve remote files for debugging"
+    print_info "Use -vvv for detailed debug output during operations"
 }
 
 cleanup_on_error() {
@@ -942,6 +1049,7 @@ cleanup_on_error() {
     print_info "  • For ensurepip/venv errors: sudo apt install python3.12-venv python3-venv"
     print_info "  • For permission errors: Check sudo access or use --python-only"
     print_info "  • For missing packages: Install python3-full and build-essential"
+    print_info "  • For modular structure errors: Ensure all modules/*.py files are present"
     print_info ""
     print_info "You can try running with different options:"
     print_info "  --skip-system-deps  (skip system package installation)"
@@ -993,8 +1101,9 @@ check_python3_availability() {
 }
 
 main() {
-    print_header "BIG-IP Device Information Extractor - Enhanced Setup"
+    print_header "BIG-IP Device Information Extractor - Enhanced Modular Setup"
     print_info "Enhanced for improved QKView functionality with F5 autodeploy endpoints"
+    print_info "Updated for modular architecture with better maintainability"
     
     # Check Python 3 availability first
     check_python3_availability
@@ -1020,8 +1129,8 @@ main() {
     
     if [[ $? -eq 0 ]]; then
         show_usage_examples
-        print_success "Enhanced installation and testing completed successfully!"
-        print_info "The scanner now includes improved QKView functionality with F5 autodeploy endpoints"
+        print_success "Enhanced modular installation and testing completed successfully!"
+        print_info "The scanner now includes modular architecture and improved QKView functionality"
         
         # Show activation reminder if virtual environment was created
         if [[ -d "$VENV_NAME" && -f "$VENV_NAME/bin/activate" ]]; then
