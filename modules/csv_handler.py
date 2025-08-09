@@ -22,6 +22,12 @@ def write_to_csv(devices_info, filename='bigip_device_info.csv'):
         'available_versions',
         'installed_hotfixes',
         'emergency_hotfixes',
+        'support_status',
+        'support_phase',
+        'end_of_software_development',
+        'end_of_technical_support',
+        'support_urgency',
+        'support_recommendation',
         'system_time',
         'total_memory',
         'memory_used',
@@ -99,3 +105,4 @@ def read_devices_from_csv(filename):
     except Exception as e:
         print(f"Error reading input file '{filename}': {str(e)}")
         return []
+
