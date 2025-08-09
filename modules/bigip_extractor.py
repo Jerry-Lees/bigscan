@@ -15,6 +15,7 @@ import urllib3
 
 from .colors import Colors
 from .qkview_handler import QKViewHandler
+from .support_lifecycle import get_support_processor
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -230,7 +231,6 @@ class BigIPInfoExtractor:
     def get_device_serial(self):
         """Extract device serial number"""
         try:
-            print("    Extracting device serial number...")
             
             # Check sys/hardware directly for bigipChassisSerialNum
             if self.verbose:
@@ -450,33 +450,107 @@ class BigIPInfoExtractor:
     def get_hotfix_info(self):
         """Extract hotfix information"""
         try:
-            # Get hotfix information
-            hotfix_data = self.api_request("sys/software/hotfix")
+            print("    Extracting hotfix information...")
             
             hotfix_list = []
             emergency_hotfixes = []
             
-            if hotfix_data and 'items' in hotfix_data:
-                for hotfix in hotfix_data['items']:
-                    hotfix_name = hotfix.get('name', 'Unknown')
-                    hotfix_version = hotfix.get('version', 'Unknown')
-                    hotfix_info = f"{hotfix_name} ({hotfix_version})"
-                    hotfix_list.append(hotfix_info)
+            # Get hotfix information from sys/software/hotfix
+            hotfix_data = self.api_request("sys/software/hotfix")
+            
+            if hotfix_data:
+                # Show full REST response only with verbose flag
+                if self.verbose:
+                    print(f"      REST API Response: {json.dumps(hotfix_data, indent=2)}")
+                
+                if 'items' in hotfix_data and hotfix_data['items']:
+                    hotfix_count = len(hotfix_data['items'])
+                    print(f"      {Colors.green(f'Found {hotfix_count} hotfix(es) installed:')}")
                     
-                    # Check if it's an emergency hotfix
-                    if any(keyword in hotfix_name.lower() for keyword in ['emergency', 'critical', 'hotfix', 'ehf']):
-                        emergency_hotfixes.append(hotfix_info)
-            
-            if hotfix_list:
-                print(f"      Found {len(hotfix_list)} hotfix(es)")
+                    for i, hotfix in enumerate(hotfix_data['items'], 1):
+                        # Extract key fields
+                        name = hotfix.get('name', 'Unknown')
+                        hotfix_id = hotfix.get('id', 'N/A')
+                        title = hotfix.get('title', 'N/A')
+                        version = hotfix.get('version', 'Unknown')
+                        product = hotfix.get('product', '')
+                        
+                        # Create details line for second row
+                        details = []
+                        if title != 'N/A':
+                            details.append(title)
+                        if hotfix_id != 'N/A':
+                            details.append(f"ID {hotfix_id}")
+                        
+                        details_line = ""
+                        if details:
+                            details_line = f"[{' ('.join(details)}"
+                            if len(details) > 1:
+                                details_line += ")"
+                            details_line += "]"
+                        
+                        # Check if it's an emergency hotfix
+                        name_lower = name.lower()
+                        title_lower = title.lower() if title != 'N/A' else ''
+                        id_lower = hotfix_id.lower() if hotfix_id != 'N/A' else ''
+                        
+                        is_emergency = any(keyword in name_lower for keyword in ['emergency', 'critical', 'hotfix', 'ehf', 'hf', 'eng']) or \
+                                      any(keyword in title_lower for keyword in ['emergency', 'critical', 'hotfix', 'ehf', 'hf', 'eng']) or \
+                                      any(keyword in id_lower for keyword in ['hf', 'ehf', 'eng'])
+                        
+                        # Display the hotfix with proper colors and two-line format
+                        if is_emergency:
+                            # Red ⚠ and yellow text
+                            print(f"        {Colors.red('⚠')} {Colors.yellow(name)}")
+                            if details_line:
+                                print(f"            {Colors.yellow(details_line)}")
+                        else:
+                            # Regular bullet point
+                            print(f"        • {name}")
+                            if details_line:
+                                print(f"            {details_line}")
+                        
+                        # Create hotfix info string for CSV
+                        if product:
+                            hotfix_info = f"{name} ({version}) - {product}"
+                        else:
+                            hotfix_info = f"{name} ({version})"
+                        
+                        # Add ID and title to the CSV info if available
+                        if hotfix_id != 'N/A' and title != 'N/A':
+                            hotfix_info += f" [ID: {hotfix_id}, Title: {title}]"
+                        elif hotfix_id != 'N/A':
+                            hotfix_info += f" [ID: {hotfix_id}]"
+                        elif title != 'N/A':
+                            hotfix_info += f" [Title: {title}]"
+                        
+                        hotfix_list.append(hotfix_info)
+                        
+                        if is_emergency:
+                            emergency_hotfixes.append(hotfix_info)
+                else:
+                    print(f"      {Colors.green('No hotfixes installed')}")
             else:
-                print(f"      {Colors.green('No hotfixes found')}")
+                print(f"      {Colors.green('No hotfix data returned from API')}")
             
-            self.device_info['installed_hotfixes'] = '; '.join(hotfix_list) if hotfix_list else 'None'
-            self.device_info['emergency_hotfixes'] = '; '.join(emergency_hotfixes) if emergency_hotfixes else 'None'
+            # Set device info for CSV output
+            if hotfix_list:
+                self.device_info['installed_hotfixes'] = '; '.join(hotfix_list)
+                print(f"      Summary: {len(hotfix_list)} hotfix(es) total")
+            else:
+                self.device_info['installed_hotfixes'] = 'None'
+            
+            if emergency_hotfixes:
+                self.device_info['emergency_hotfixes'] = '; '.join(emergency_hotfixes)
+                print(f"      Emergency/Critical: {len(emergency_hotfixes)} hotfix(es)")
+            else:
+                self.device_info['emergency_hotfixes'] = 'None'
             
         except Exception as e:
-            print(f"Error getting hotfix info: {str(e)}")
+            print(f"      Error getting hotfix info: {str(e)}")
+            if self.verbose:
+                import traceback
+                print(f"      Traceback: {traceback.format_exc()}")
             self.device_info['installed_hotfixes'] = 'N/A'
             self.device_info['emergency_hotfixes'] = 'N/A'
     
@@ -547,8 +621,9 @@ class BigIPInfoExtractor:
                 self.device_info['system_time'] = current_time
                 print(f"      Using local timestamp: {current_time}")
                 return
-        except:
-            pass
+        except Exception as e:
+            if self.verbose:
+                print(f"      Error getting fallback time: {str(e)}")
         
         print("      Could not determine system time")
     
@@ -645,8 +720,9 @@ class BigIPInfoExtractor:
                                     self.device_info['ha_status'] = status_value
                                     print(f"      Found HA status in entries: {status_value}")
                                     return
-        except:
-            pass
+        except Exception as e:
+            if self.verbose:
+                print(f"      Error checking sys/failover: {str(e)}")
         
         # Method 2: Try cm/device to check for clustering
         try:
@@ -661,8 +737,9 @@ class BigIPInfoExtractor:
                     self.device_info['ha_status'] = 'Standalone'
                     print(f"      Single device detected: Standalone")
                     return
-        except:
-            pass
+        except Exception as e:
+            if self.verbose:
+                print(f"      Error checking cm/device: {str(e)}")
         
         # Method 3: Default to Standalone
         self.device_info['ha_status'] = 'Standalone'
@@ -762,6 +839,56 @@ class BigIPInfoExtractor:
             print(f"      Error formatting time '{time_string}': {str(e)}")
             return time_string
     
+    def _get_support_lifecycle_info(self):
+        """Get F5 software support lifecycle information"""
+        try:
+            active_version = self.device_info.get('active_version', 'N/A')
+            
+            if active_version and active_version != 'N/A':
+                support_processor = get_support_processor(verbose=self.verbose)
+                support_info = support_processor.get_version_support_info(active_version)
+                
+                if support_info['found']:
+                    self.device_info['support_status'] = support_info['support_status']
+                    self.device_info['support_phase'] = support_info['support_phase']
+                    self.device_info['end_of_software_development'] = support_info.get('end_of_software_development', 'N/A')
+                    self.device_info['end_of_technical_support'] = support_info.get('end_of_technical_support', 'N/A')
+                    self.device_info['support_urgency'] = support_info['urgency']
+                    self.device_info['support_recommendation'] = support_info['recommendation']
+                    
+                    if self.verbose:
+                        print(f"      Support Status: {support_info['support_status']}")
+                        print(f"      Support Phase: {support_info['support_phase']}")
+                        print(f"      Urgency: {support_info['urgency']}")
+                    elif support_info['urgency'] in ['High', 'Critical']:
+                        print(f"      {Colors.yellow('⚠')} Support Status: {support_info['support_status']} - {support_info['urgency']} priority")
+                    else:
+                        print(f"      Support Status: {support_info['support_status']}")
+                else:
+                    self.device_info['support_status'] = 'Unknown'
+                    self.device_info['support_phase'] = 'Unknown'
+                    self.device_info['end_of_software_development'] = 'N/A'
+                    self.device_info['end_of_technical_support'] = 'N/A'
+                    self.device_info['support_urgency'] = 'Unknown'
+                    self.device_info['support_recommendation'] = 'Verify version number and check F5 documentation'
+                    print(f"      Support Status: Unknown (version not in database)")
+            else:
+                self.device_info['support_status'] = 'N/A'
+                self.device_info['support_phase'] = 'N/A'
+                self.device_info['end_of_software_development'] = 'N/A'
+                self.device_info['end_of_technical_support'] = 'N/A'
+                self.device_info['support_urgency'] = 'N/A'
+                self.device_info['support_recommendation'] = 'N/A'
+                
+        except Exception as e:
+            print(f"      Error getting support lifecycle info: {str(e)}")
+            self.device_info['support_status'] = 'Error'
+            self.device_info['support_phase'] = 'Error'
+            self.device_info['end_of_software_development'] = 'Error'
+            self.device_info['end_of_technical_support'] = 'Error'
+            self.device_info['support_urgency'] = 'Error'
+            self.device_info['support_recommendation'] = 'Error retrieving support information'
+    
     def extract_all_info(self):
         """Extract all device information"""
         if not self.connect():
@@ -779,11 +906,15 @@ class BigIPInfoExtractor:
         print("    Extracting software version...")
         self.get_software_version()
         
-        print("    Extracting hotfix information...")
+        # Extract hotfix information (called only once here)
         self.get_hotfix_info()
         
         print("  Extracting additional information...")
         self.get_additional_info()
+        
+        # Get F5 software support lifecycle information
+        print("  Getting F5 software support lifecycle information...")
+        self._get_support_lifecycle_info()
         
         # Create and download QKView if requested
         if self.create_qkview:
