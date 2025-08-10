@@ -14,6 +14,7 @@ import requests
 import urllib3
 
 from .colors import Colors
+from .auth_handler import BigIPAuthHandler
 from .qkview_handler import QKViewHandler
 from .support_lifecycle import get_support_processor
 
@@ -27,7 +28,6 @@ class BigIPInfoExtractor:
         self.host = host
         self.username = username
         self.password = password
-        self.token = None
         self.session = requests.Session()
         self.session.verify = False
         self.base_url = f"https://{self.host}"
@@ -35,8 +35,12 @@ class BigIPInfoExtractor:
         self.create_qkview = create_qkview
         self.qkview_timeout = qkview_timeout
         self.no_delete = no_delete
-        self.token_timeout = 1200  # 20 minutes default token timeout
         self.verbose = verbose
+        
+        # Initialize authentication handler
+        self.auth_handler = BigIPAuthHandler(
+            host, username, password, self.session, verbose
+        )
         
         # Initialize QKView handler
         if create_qkview:
@@ -48,82 +52,10 @@ class BigIPInfoExtractor:
                 verbose
             )
     
-    def get_auth_token(self):
-        """Get authentication token from BIG-IP"""
-        try:
-            print(f"Getting auth token from {self.host}...")
-            
-            # Prepare authentication payload
-            auth_data = {
-                "username": self.username,
-                "password": self.password,
-                "loginProviderName": "tmos"
-            }
-            
-            # Request authentication token
-            response = self.session.post(
-                f"{self.base_url}/mgmt/shared/authn/login",
-                json=auth_data,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                auth_response = response.json()
-                self.token = auth_response.get('token', {}).get('token')
-                if self.token:
-                    # Set token in session headers
-                    self.session.headers.update({
-                        'X-F5-Auth-Token': self.token,
-                        'Content-Type': 'application/json'
-                    })
-                    print("Authentication token obtained successfully!")
-                    # Extend token timeout for long operations
-                    self._extend_token_timeout()
-                    return True
-                else:
-                    print("Failed to obtain authentication token from response")
-                    return False
-            else:
-                print(f"Authentication failed: {response.status_code} - {response.text}")
-                return False
-                
-        except Exception as e:
-            print(f"Error getting authentication token: {str(e)}")
-            return False
-    
-    def _extend_token_timeout(self):
-        """Extend the authentication token timeout"""
-        try:
-            if not self.token:
-                return
-            
-            extend_url = f"{self.base_url}/mgmt/shared/authz/tokens/{self.token}"
-            extend_payload = {
-                "timeout": self.token_timeout
-            }
-            
-            response = self.session.patch(extend_url, json=extend_payload, timeout=30)
-            response.raise_for_status()
-            
-        except Exception as e:
-            print(f"Warning: Could not extend token timeout for {self.host}: {str(e)}")
-    
-    def logout(self):
-        """Logout and invalidate the authentication token"""
-        try:
-            if not self.token:
-                return
-            
-            logout_url = f"{self.base_url}/mgmt/shared/authz/tokens/{self.token}"
-            self.session.delete(logout_url, timeout=30)
-            
-            # Clean up session
-            self.token = None
-            if 'X-F5-Auth-Token' in self.session.headers:
-                del self.session.headers['X-F5-Auth-Token']
-            
-        except Exception as e:
-            print(f"Warning: Could not logout cleanly from {self.host}: {str(e)}")
+    @property
+    def token(self):
+        """Get the current authentication token"""
+        return self.auth_handler.get_token()
     
     def api_request(self, endpoint):
         """Make authenticated API request"""
@@ -160,7 +92,11 @@ class BigIPInfoExtractor:
     
     def connect(self):
         """Establish connection to BIG-IP device"""
-        return self.get_auth_token()
+        return self.auth_handler.get_auth_token()
+    
+    def logout(self):
+        """Logout and cleanup session"""
+        self.auth_handler.logout()
     
     def get_system_info(self):
         """Extract basic system information"""
@@ -925,7 +861,7 @@ class BigIPInfoExtractor:
                 print("  Creating and downloading QKView...")
             
             # Set token in QKView handler
-            self.qkview_handler.set_token(self.token)
+            self.qkview_handler.set_token(self.auth_handler.get_token())
             
             # Update device info in QKView handler
             self.qkview_handler.set_device_info(self.device_info)
@@ -942,3 +878,4 @@ class BigIPInfoExtractor:
         self.logout()
         
         return True
+
