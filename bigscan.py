@@ -18,7 +18,7 @@ Requirements:
 
 Usage:
     python bigscan.py [--user USERNAME] [--pass PASSWORD] [--out FILENAME] [--in INPUT_CSV] [--qkview] [--help]
-    
+
 Examples:
     python bigscan.py                                              # Interactive mode
     python bigscan.py --user admin                                 # Specify user, prompt for password  
