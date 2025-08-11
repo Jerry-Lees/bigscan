@@ -46,7 +46,7 @@ class UCSHandler:
             # Step 1: Create UCS task
             task_result = self._create_ucs_task()
             if not task_result:
-                print("  ✗ Failed to create UCS task")
+                print(f"  {Colors.red('✗')} Failed to create UCS task")
                 return False
             
             task_id, ucs_filename = task_result
@@ -54,7 +54,7 @@ class UCSHandler:
             # Step 2: Wait for UCS to complete
             ucs_info = self._wait_for_ucs_completion(task_id)
             if not ucs_info:
-                print("  ✗ UCS creation timed out or failed")
+                print(f"  {Colors.red('✗')} UCS creation timed out or failed")
                 
                 # But check if file exists anyway before giving up completely
                 print("  Checking if UCS file was created despite connection issues...")
@@ -91,14 +91,14 @@ class UCSHandler:
                 
                 return True
             else:
-                print("  ✗ Failed to download UCS")
+                print(f"  {Colors.red('✗')} Failed to download UCS")
                 # Don't cleanup if download failed - leave files for debugging
                 print(f"  {Colors.yellow('ℹ')} Remote files left for debugging since download failed")
                 print(f"  Remote UCS file: /var/local/ucs/{ucs_filename}")
                 return False
                 
         except Exception as e:
-            print(f"  ✗ Error creating/downloading UCS: {str(e)}")
+            print(f"  {Colors.red('✗')} Error creating/downloading UCS: {str(e)}")
             print(f"  Traceback: {traceback.format_exc()}")
             return False
     
@@ -142,10 +142,10 @@ class UCSHandler:
                     print(f"    Response status: {response.status_code}")
                 
             except requests.exceptions.Timeout:
-                print(f"    ✗ UCS task creation timed out")
+                print(f"    {Colors.red('✗')} UCS task creation timed out")
                 return None
             except Exception as e:
-                print(f"    ✗ UCS task creation failed: {str(e)}")
+                print(f"    {Colors.red('✗')} UCS task creation failed: {str(e)}")
                 return None
             
             if response.status_code in [200, 202]:
@@ -171,12 +171,12 @@ class UCSHandler:
                         print(f"    ✗ Failed to validate UCS task")
                         return None
                 else:
-                    print(f"    ✗ No task ID found in response")
+                    print(f"    {Colors.red('✗')} No task ID found in response")
                     print(f"    Response: {response_data}")
                     return None
                     
             else:
-                print(f"    ✗ Failed to create UCS task: {response.status_code}")
+                print(f"    {Colors.red('✗')} Failed to create UCS task: {response.status_code}")
                 try:
                     error_details = response.json()
                     print(f"    Error details: {error_details}")
@@ -203,13 +203,13 @@ class UCSHandler:
                             if self._validate_ucs_task(task_id):
                                 return (task_id, simple_filename)
                             else:
-                                print(f"    ✗ Failed to validate simplified UCS task")
+                                print(f"    {Colors.red('✗')} Failed to validate simplified UCS task")
                                 return None
                 
                 return None
                 
         except Exception as e:
-            print(f"    ✗ Error creating UCS task: {str(e)}")
+            print(f"    {Colors.red('✗')} Error creating UCS task: {str(e)}")
             return None
     
     def _validate_ucs_task(self, task_id):
@@ -249,7 +249,7 @@ class UCSHandler:
                     print(f"    {Colors.green('✓')} UCS task validated (202 response)")
                     return True
             else:
-                print(f"    ✗ Failed to validate UCS task: {response.status_code}")
+                print(f"    {Colors.red('✗')} Failed to validate UCS task: {response.status_code}")
                 try:
                     error_details = response.json()
                     print(f"    Validation error: {error_details}")
@@ -258,7 +258,7 @@ class UCSHandler:
                 return False
                 
         except Exception as e:
-            print(f"    ✗ Error validating UCS task: {str(e)}")
+            print(f"    {Colors.red('✗')} Error validating UCS task: {str(e)}")
             return False
     
     def _wait_for_ucs_completion(self, task_id):
@@ -301,7 +301,7 @@ class UCSHandler:
                     
                     elif current_status == 'FAILED':
                         print(f'\x1b[2K\r      [{elapsed}s] Task Status: FAILED')
-                        print(f'    ✗ UCS generation failed (after {elapsed}s)')
+                        print(f'    {Colors.red("✗")} UCS generation failed (after {elapsed}s)')
                         # Print error details if available
                         if 'errorMessage' in result:
                             print(f'    Error: {result["errorMessage"]}')
@@ -376,14 +376,16 @@ class UCSHandler:
                             print(f'    Continuing to wait (timeout in {self.ucs_timeout - elapsed}s)...')
                             consecutive_failures = 5  # Reset to allow more attempts
                         else:
-                            print(f'\n    ✗ Too many consecutive failures, aborting')
+                            print(f'\n    {Colors.red("✗")} Too many consecutive failures, aborting')
                             return None
+                    
+                    time.sleep(check_interval)
                     
                     time.sleep(check_interval)
             
             elapsed = int(time.time() - start_time)
             print(f'\x1b[2K\r      [{elapsed}s] Task Status: TIMEOUT : Exceeded {self.ucs_timeout}s limit')
-            print(f'    ✗ UCS creation timed out after {elapsed} seconds')
+            print(f'    {Colors.red("✗")} UCS creation timed out after {elapsed} seconds')
             
             # Before giving up completely, do one final check
             try:
@@ -404,7 +406,7 @@ class UCSHandler:
         except Exception as e:
             elapsed = int(time.time() - start_time) if 'start_time' in locals() else 0
             print(f'\x1b[2K\r      [{elapsed}s] Task Status: ERROR : {str(e)}')
-            print(f'    ✗ Error waiting for UCS completion')
+            print(f'    {Colors.red("✗")} Error waiting for UCS completion')
             return None
     
     def _check_ucs_file_exists(self, task_id):
@@ -501,7 +503,7 @@ class UCSHandler:
                                     last_size = current_size
                             except ValueError:
                                 pass
-                except:
+                except Exception:
                     pass
                 
                 time.sleep(5)  # Wait 5 seconds between checks
@@ -523,7 +525,7 @@ class UCSHandler:
             # First, verify the file exists and get its details
             actual_path = self._find_ucs_file(ucs_filename)
             if not actual_path:
-                print(f"    ✗ UCS file not found on remote system")
+                print(f"    {Colors.red('✗')} UCS file not found on remote system")
                 print(f"    Expected location: {ucs_path}")
                 return False, 0
             
@@ -568,7 +570,7 @@ class UCSHandler:
                 verify_result = verify_response.json()
                 if 'commandResult' in verify_result:
                     if 'NOT_READABLE' in verify_result['commandResult']:
-                        print(f"    ✗ UCS file exists but is not readable")
+                        print(f"    {Colors.red('✗')} UCS file exists but is not readable")
                         return False, 0
                     else:
                         print(f"    {Colors.green('✓')} File is readable and ready for download")
@@ -581,11 +583,11 @@ class UCSHandler:
                 print(f"    {Colors.green('✓')} Download successful.")
                 return True, file_size
             else:
-                print(f"    ✗ Download failed")
+                print(f"    {Colors.red('✗')} Download failed")
                 return False, file_size
                 
         except Exception as e:
-            print(f"    ✗ Error downloading UCS: {str(e)}")
+            print(f"    {Colors.red('✗')} Error downloading UCS: {str(e)}")
             return False, 0
     
     def _find_ucs_file(self, filename):
@@ -794,7 +796,7 @@ class UCSHandler:
                     if final_size >= total_size * 0.95:  # At least 95%
                         print(f"      {Colors.green('✓')} File size is acceptable (95%+ of expected)")
                     else:
-                        print(f"      ✗ File size too different - download may be incomplete")
+                        print(f"      {Colors.red('✗')} File size too different - download may be incomplete")
                         return False, final_size
             
             # Basic sanity check - UCS files should be substantial  
@@ -822,13 +824,14 @@ class UCSHandler:
     def _cleanup_ucs_task(self, task_id):
         """Clean up UCS task using F5 task endpoint"""
         try:
+            # Clean up the task record
             cleanup_url = f"{self.base_url}/mgmt/tm/task/sys/ucs/{task_id}"
             
             print(f"    Cleaning up UCS task: {task_id}")
             response = self.session.delete(cleanup_url, timeout=30)
             response.raise_for_status()
             
-            print(f"    ✓ UCS task cleaned up successfully")
+            print(f"    {Colors.green('✓')} UCS task cleaned up successfully")
             
         except Exception as e:
             print(f"    Warning: Failed to cleanup UCS task {task_id}: {str(e)}")
@@ -920,4 +923,3 @@ class UCSHandler:
                 
         except Exception as e:
             print(f"    Warning: Failed to cleanup original UCS file: {str(e)}")
-

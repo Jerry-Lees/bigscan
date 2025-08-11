@@ -45,13 +45,13 @@ class QKViewHandler:
             # Step 1: Create QKView task
             task_id = self._create_qkview_task()
             if not task_id:
-                print("  ✗ Failed to create QKView task")
+                print(f"  {Colors.red('✗')} Failed to create QKView task")
                 return False
             
             # Step 2: Wait for QKView to complete
             qkview_info = self._wait_for_qkview_completion(task_id)
             if not qkview_info:
-                print("  ✗ QKView creation timed out or failed")
+                print(f"  {Colors.red('✗')} QKView creation timed out or failed")
                 return False
             
             # Step 3: Download QKView
@@ -79,7 +79,7 @@ class QKViewHandler:
                 
                 return True
             else:
-                print("  ✗ Failed to download QKView")
+                print(f"  {Colors.red('✗')} Failed to download QKView")
                 # Don't cleanup if download failed - leave files for debugging
                 filename = qkview_info.get('name', 'unknown')
                 print(f"  {Colors.yellow('ℹ')} Remote files left for debugging since download failed")
@@ -87,7 +87,7 @@ class QKViewHandler:
                 return False
                 
         except Exception as e:
-            print(f"  ✗ Error creating/downloading QKView: {str(e)}")
+            print(f"  {Colors.red('✗')} Error creating/downloading QKView: {str(e)}")
             print(f"  Traceback: {traceback.format_exc()}")
             return False
     
@@ -129,10 +129,10 @@ class QKViewHandler:
                     print(f"    Response status: {response.status_code}")
                 
             except requests.exceptions.Timeout:
-                print(f"    ✗ QKView task creation timed out")
+                print(f"    {Colors.red('✗')} QKView task creation timed out")
                 return None
             except Exception as e:
-                print(f"    ✗ QKView task creation failed: {str(e)}")
+                print(f"    {Colors.red('✗')} QKView task creation failed: {str(e)}")
                 return None
             
             if response.status_code in [200, 202]:
@@ -149,12 +149,12 @@ class QKViewHandler:
                     print(f"    {Colors.green('✓')} QKView task created with ID: {Colors.light_blue(task_id)}")
                     return task_id
                 else:
-                    print(f"    ✗ No task ID found in response")
+                    print(f"    {Colors.red('✗')} No task ID found in response")
                     print(f"    Response: {response_data}")
                     return None
                     
             else:
-                print(f"    ✗ Failed to create QKView task: {response.status_code}")
+                print(f"    {Colors.red('✗')} Failed to create QKView task: {response.status_code}")
                 try:
                     error_details = response.json()
                     print(f"    Error details: {error_details}")
@@ -180,7 +180,7 @@ class QKViewHandler:
                 return None
                 
         except Exception as e:
-            print(f"    ✗ Error creating QKView task: {str(e)}")
+            print(f"    {Colors.red('✗')} Error creating QKView task: {str(e)}")
             return None
     
     def _wait_for_qkview_completion(self, task_id):
@@ -218,7 +218,7 @@ class QKViewHandler:
                     
                     elif current_status == 'FAILED':
                         print(f'\x1b[2K\r      [{elapsed}s] Task Status (Generation: {current_generation}): {current_status} : Failed!')
-                        print(f'    ✗ QKView generation failed (after {elapsed}s)')
+                        print(f'    {Colors.red("✗")} QKView generation failed (after {elapsed}s)')
                         return None
                     
                     elif current_status == 'IN_PROGRESS':
@@ -246,19 +246,19 @@ class QKViewHandler:
                         print(f'\x1b[2K\r{error_line}', end='', flush=True)
                         last_printed_line = error_line
                     if check_count >= 3:
-                        print(f'\n    ✗ Multiple consecutive failures, aborting')
+                        print(f'\n    {Colors.red("✗")} Multiple consecutive failures, aborting')
                         return None
                     time.sleep(check_interval)
             
             elapsed = int(time.time() - start_time)
             print(f'\x1b[2K\r      [{elapsed}s] Task Status (Generation: {current_generation}): TIMEOUT : Exceeded {self.qkview_timeout}s limit')
-            print(f'    ✗ QKView creation timed out after {elapsed} seconds')
+            print(f'    {Colors.red("✗")} QKView creation timed out after {elapsed} seconds')
             return None
             
         except Exception as e:
             elapsed = int(time.time() - start_time) if 'start_time' in locals() else 0
             print(f'\x1b[2K\r      [{elapsed}s] Task Status (Generation: N/A): ERROR : {str(e)}')
-            print(f'    ✗ Error waiting for QKView completion')
+            print(f'    {Colors.red("✗")} Error waiting for QKView completion')
             return None
     
     def _download_qkview(self, qkview_info):
@@ -267,7 +267,7 @@ class QKViewHandler:
             # Extract filename from qkview_info
             filename = qkview_info.get('name')
             if not filename:
-                print(f"    ✗ No filename found in QKView info")
+                print(f"    {Colors.red('✗')} No filename found in QKView info")
                 return False, 0
             
             print(f"    Downloading QKView: {filename}")
@@ -297,22 +297,22 @@ class QKViewHandler:
                             print(f"    {Colors.green('✓')} Download successful.")
                             return True, file_size
                         else:
-                            print(f"    ✗ Download failed using {method_name}")
+                            print(f"    {Colors.red('✗')} Download failed using {method_name}")
                     elif result:
                         # Legacy method that returns boolean only
                         print(f"    {Colors.green('✓')} Download successful.")
                         return True, 0
                     else:
-                        print(f"    ✗ Download failed using {method_name} (legacy)")
+                        print(f"    {Colors.red('✗')} Download failed using {method_name} (legacy)")
                 except Exception as e:
-                    print(f"    ✗ Exception in {method_name}: {str(e)}")
+                    print(f"    {Colors.red('✗')} Exception in {method_name}: {str(e)}")
                     continue
             
-            print(f"    ✗ All download methods failed")
+            print(f"    {Colors.red('✗')} All download methods failed")
             return False, 0
                 
         except Exception as e:
-            print(f"    ✗ Error downloading QKView: {str(e)}")
+            print(f"    {Colors.red('✗')} Error downloading QKView: {str(e)}")
             return False, 0
     
     def _find_qkview_file(self, filename):
@@ -580,7 +580,7 @@ class QKViewHandler:
                     with open(local_path, 'rb') as f:
                         first_bytes = f.read(100)
                         if b'<html>' in first_bytes.lower() or b'error' in first_bytes.lower():
-                            print(f"      ✗ File appears to be an error response")
+                            print(f"      {Colors.red('✗')} File appears to be an error response")
                             return False, final_size
                 except:
                     pass
@@ -636,9 +636,9 @@ class QKViewHandler:
                     print(f"      Source file not found: {bash_result['commandResult']}")
                     return False, 0
                 
-                print(f"      ✓ File moved using bash command")
+                print(f"      {Colors.green('✓')} File moved using bash command")
             else:
-                print(f"      ✓ File moved using unix-mv")
+                print(f"      {Colors.green('✓')} File moved using unix-mv")
             
             # Now download via file transfer API
             download_url = f"{self.base_url}/mgmt/shared/file-transfer/downloads/{filename}"
@@ -718,7 +718,7 @@ class QKViewHandler:
                 print(f"      Source file not found during copy: {result['commandResult']}")
                 return False, 0
             
-            print(f"      ✓ File copied to download directory")
+            print(f"      {Colors.green('✓')} File copied to download directory")
             
             # Download from the file transfer API
             download_url = f"{self.base_url}/mgmt/shared/file-transfer/downloads/{filename}"
@@ -794,11 +794,11 @@ class QKViewHandler:
                                 print(f"        Downloaded: {downloaded / (1024*1024):.1f} MB")
             
             final_size = os.path.getsize(local_path)
-            print(f"      ✓ Downloaded: {filename} ({final_size / (1024*1024):.1f} MB)")
+            print(f"      {Colors.green('✓')} Downloaded: {filename} ({final_size / (1024*1024):.1f} MB)")
             
             # Check if we got a reasonable file size (should be > 5MB for most QKViews)
             if final_size < 5 * 1024 * 1024:  # Less than 5MB
-                print(f"      ⚠ Warning: Downloaded file seems small for a QKView ({final_size / (1024*1024):.1f} MB)")
+                print(f"      {Colors.yellow('⚠')} Warning: Downloaded file seems small for a QKView ({final_size / (1024*1024):.1f} MB)")
                 print(f"      This might be a partial download or error response")
                 
                 # Try to read first few bytes to see if it's an error response
@@ -806,7 +806,7 @@ class QKViewHandler:
                     with open(local_path, 'rb') as f:
                         first_bytes = f.read(100)
                         if b'<html>' in first_bytes.lower() or b'error' in first_bytes.lower():
-                            print(f"      ✗ File appears to be an error response, not a QKView")
+                            print(f"      {Colors.red('✗')} File appears to be an error response, not a QKView")
                             return False, final_size
                 except:
                     pass
@@ -817,7 +817,7 @@ class QKViewHandler:
                     print(f"      Warning: File size mismatch. Expected: {total_size / (1024*1024):.1f} MB, Downloaded: {final_size / (1024*1024):.1f} MB")
                     return False, final_size
                 else:
-                    print(f"      ✓ File size verified: {final_size / (1024*1024):.1f} MB")
+                    print(f"      {Colors.green('✓')} File size verified: {final_size / (1024*1024):.1f} MB")
             
             return True, final_size
             
@@ -837,7 +837,7 @@ class QKViewHandler:
             response = self.session.delete(cleanup_url, timeout=30)
             response.raise_for_status()
             
-            print(f"    ✓ QKView task cleaned up successfully")
+            print(f"    {Colors.green('✓')} QKView task cleaned up successfully")
             
         except Exception as e:
             print(f"    Warning: Failed to cleanup QKView task {task_id}: {str(e)}")
@@ -855,7 +855,7 @@ class QKViewHandler:
             response = self.session.post(cleanup_url, json=cleanup_payload, timeout=30)
             response.raise_for_status()
             
-            print(f"    ✓ Original QKView file cleaned up")
+            print(f"    {Colors.green('✓')} Original QKView file cleaned up")
             
         except Exception as e:
             print(f"    Warning: Failed to cleanup original QKView file: {str(e)}")
