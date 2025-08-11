@@ -10,6 +10,7 @@ from .csv_handler import write_to_csv, read_devices_from_csv
 from .auth_handler import BigIPAuthHandler, get_credentials_for_device
 from .device_processor import process_devices_from_file, process_devices_interactively
 from .qkview_handler import QKViewHandler
+from .ucs_handler import UCSHandler
 from .support_lifecycle import SupportLifecycleProcessor, get_support_processor
 
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     'process_devices_from_file',
     'process_devices_interactively',
     'QKViewHandler',
+    'UCSHandler',
     'SupportLifecycleProcessor',
     'get_support_processor'
 ]

@@ -21,6 +21,11 @@ def process_devices_from_file(args):
     if args.qkview:
         print("QKView creation and download enabled using F5 autodeploy endpoint")
         print(f"QKView timeout: {args.qkview_timeout} seconds ({args.qkview_timeout/60:.1f} minutes)")
+    if args.ucs:
+        print("UCS backup creation and download enabled")
+        print(f"UCS timeout: {args.ucs_timeout} seconds ({args.ucs_timeout/60:.1f} minutes)")
+    if args.qkview and args.ucs:
+        print(f"{Colors.yellow('⚠')} Both QKView and UCS enabled - processing will take longer")
     print("=" * 50)
     
     for i, device in enumerate(devices, 1):
@@ -42,6 +47,8 @@ def process_devices_from_file(args):
             password, 
             create_qkview=args.qkview,
             qkview_timeout=args.qkview_timeout,
+            create_ucs=args.ucs,
+            ucs_timeout=args.ucs_timeout,
             no_delete=args.no_delete,
             verbose=args.verbose
         )
@@ -54,9 +61,12 @@ def process_devices_from_file(args):
             hostname = extractor.device_info.get('hostname', 'N/A')
             version = extractor.device_info.get('active_version', 'N/A')
             qkview_status = extractor.device_info.get('qkview_downloaded', 'N/A')
+            ucs_status = extractor.device_info.get('ucs_downloaded', 'N/A')
             print(f"    Hostname: {hostname}, Version: {version}")
             if args.qkview:
                 print(f"    QKView: {qkview_status}")
+            if args.ucs:
+                print(f"    UCS: {ucs_status}")
         else:
             print(f"  ✗ Failed to extract information from {device['ip']}")
             
@@ -76,6 +86,8 @@ def process_devices_from_file(args):
                         retry_password,
                         create_qkview=args.qkview,
                         qkview_timeout=args.qkview_timeout,
+                        create_ucs=args.ucs,
+                        ucs_timeout=args.ucs_timeout,
                         no_delete=args.no_delete,
                         verbose=args.verbose
                     )
@@ -85,9 +97,12 @@ def process_devices_from_file(args):
                         hostname = extractor.device_info.get('hostname', 'N/A')
                         version = extractor.device_info.get('active_version', 'N/A')
                         qkview_status = extractor.device_info.get('qkview_downloaded', 'N/A')
+                        ucs_status = extractor.device_info.get('ucs_downloaded', 'N/A')
                         print(f"    Hostname: {hostname}, Version: {version}")
                         if args.qkview:
                             print(f"    QKView: {qkview_status}")
+                        if args.ucs:
+                            print(f"    UCS: {ucs_status}")
                     else:
                         print(f"  ✗ Authentication failed again for {device['ip']}")
     
@@ -114,6 +129,8 @@ def process_devices_interactively(args):
             password, 
             create_qkview=args.qkview,
             qkview_timeout=args.qkview_timeout,
+            create_ucs=args.ucs,
+            ucs_timeout=args.ucs_timeout,
             no_delete=args.no_delete,
             verbose=args.verbose
         )
@@ -134,6 +151,12 @@ def process_devices_interactively(args):
                     print(f"  QKView: {Colors.green('✓')} {qkview_status}")
                 else:
                     print(f"  QKView: {qkview_status}")
+            if args.ucs:
+                ucs_status = extractor.device_info.get('ucs_downloaded', 'N/A')
+                if ucs_status == 'Yes':
+                    print(f"  UCS: {Colors.green('✓')} {ucs_status}")
+                else:
+                    print(f"  UCS: {ucs_status}")
         else:
             print(f"Failed to extract information from {host}")
             
@@ -153,6 +176,8 @@ def process_devices_interactively(args):
                         password,
                         create_qkview=args.qkview,
                         qkview_timeout=args.qkview_timeout,
+                        create_ucs=args.ucs,
+                        ucs_timeout=args.ucs_timeout,
                         no_delete=args.no_delete,
                         verbose=args.verbose
                     )
@@ -172,6 +197,12 @@ def process_devices_interactively(args):
                                 print(f"  QKView: {Colors.green('✓')} {qkview_status}")
                             else:
                                 print(f"  QKView: {qkview_status}")
+                        if args.ucs:
+                            ucs_status = extractor.device_info.get('ucs_downloaded', 'N/A')
+                            if ucs_status == 'Yes':
+                                print(f"  UCS: {Colors.green('✓')} {ucs_status}")
+                            else:
+                                print(f"  UCS: {ucs_status}")
                     else:
                         print(f"Authentication failed again for {host}")
         
@@ -183,4 +214,4 @@ def process_devices_interactively(args):
             break
     
     return devices_info
-    
+

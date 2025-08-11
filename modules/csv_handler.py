@@ -8,7 +8,41 @@ import csv
 def write_to_csv(devices_info, filename='bigip_device_info.csv'):
     """Write device information to CSV file"""
     if not devices_info:
-        print("No device information to write.")
+        # Create empty CSV with headers even if no data
+        headers = [
+            'management_ip',
+            'hostname',
+            'serial_number',
+            'registration_key',
+            'platform',
+            'active_version',
+            'available_versions',
+            'installed_hotfixes',
+            'emergency_hotfixes',
+            'support_status',
+            'support_phase',
+            'end_of_software_development',
+            'end_of_technical_support',
+            'support_urgency',
+            'support_recommendation',
+            'system_time',
+            'total_memory',
+            'memory_used',
+            'tmm_memory',
+            'cpu_count',
+            'ha_status',
+            'qkview_downloaded',
+            'ucs_downloaded',
+            'extraction_timestamp'
+        ]
+        
+        try:
+            with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=headers)
+                writer.writeheader()
+            print(f"Empty CSV file created with headers: {filename}")
+        except Exception as e:
+            print(f"Error creating empty CSV: {str(e)}")
         return
     
     # Define CSV headers
@@ -35,6 +69,7 @@ def write_to_csv(devices_info, filename='bigip_device_info.csv'):
         'cpu_count',
         'ha_status',
         'qkview_downloaded',
+        'ucs_downloaded',
         'extraction_timestamp'
     ]
     

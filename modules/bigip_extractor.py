@@ -16,6 +16,7 @@ import urllib3
 from .colors import Colors
 from .auth_handler import BigIPAuthHandler
 from .qkview_handler import QKViewHandler
+from .ucs_handler import UCSHandler
 from .support_lifecycle import get_support_processor
 
 # Disable SSL warnings for self-signed certificates
@@ -23,7 +24,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class BigIPInfoExtractor:
-    def __init__(self, host, username, password, create_qkview=False, qkview_timeout=1200, no_delete=False, verbose=False):
+    def __init__(self, host, username, password, create_qkview=False, qkview_timeout=1200, create_ucs=False, ucs_timeout=900, no_delete=False, verbose=False):
         """Initialize connection to BIG-IP device"""
         self.host = host
         self.username = username
@@ -34,6 +35,8 @@ class BigIPInfoExtractor:
         self.device_info = {}
         self.create_qkview = create_qkview
         self.qkview_timeout = qkview_timeout
+        self.create_ucs = create_ucs
+        self.ucs_timeout = ucs_timeout
         self.no_delete = no_delete
         self.verbose = verbose
         
@@ -48,6 +51,16 @@ class BigIPInfoExtractor:
                 self.session, 
                 self.base_url, 
                 qkview_timeout, 
+                no_delete,
+                verbose
+            )
+        
+        # Initialize UCS handler
+        if create_ucs:
+            self.ucs_handler = UCSHandler(
+                self.session,
+                self.base_url,
+                ucs_timeout,
                 no_delete,
                 verbose
             )
@@ -870,6 +883,25 @@ class BigIPInfoExtractor:
             self.device_info['qkview_downloaded'] = 'Yes' if qkview_success else 'Failed'
         else:
             self.device_info['qkview_downloaded'] = 'Not requested'
+        
+        # Create and download UCS if requested
+        if self.create_ucs:
+            if self.verbose:
+                print("  Creating UCS backup...")
+                print(f"  UCS timeout configured for: {self.ucs_timeout} seconds ({self.ucs_timeout/60:.1f} minutes)")
+            else:
+                print("  Creating and downloading UCS backup...")
+            
+            # Set token in UCS handler
+            self.ucs_handler.set_token(self.auth_handler.get_token())
+            
+            # Update device info in UCS handler
+            self.ucs_handler.set_device_info(self.device_info)
+            
+            ucs_success = self.ucs_handler.create_and_download_ucs()
+            self.device_info['ucs_downloaded'] = 'Yes' if ucs_success else 'Failed'
+        else:
+            self.device_info['ucs_downloaded'] = 'Not requested'
         
         # Add extraction timestamp
         self.device_info['extraction_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

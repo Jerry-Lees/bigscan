@@ -9,16 +9,22 @@ The data is exported to a CSV file for easy analysis.
 Enhanced QKView Feature:
 - Uses F5's official autodeploy endpoint for reliable QKView generation
 - Proper asynchronous task monitoring
-- Downloads QKViews to local 'qkviews' directory
+- Downloads QKViews to local 'QKViews' directory
 - Automatic cleanup of remote files after download
 - Enhanced error handling and progress reporting
+
+Enhanced UCS Feature:
+- Creates UCS (User Configuration Set) backup files on remote BIG-IP devices
+- Downloads UCS files to local 'UCS' directory
+- UCS files contain complete configuration backups including certificates and keys
+- Configurable timeout and cleanup options
 
 Requirements:
     pip install requests urllib3
 
 Usage:
-    python bigscan.py [--user USERNAME] [--pass PASSWORD] [--out FILENAME] [--in INPUT_CSV] [--qkview] [--help]
-
+    python bigscan.py [--user USERNAME] [--pass PASSWORD] [--out FILENAME] [--in INPUT_CSV] [--qkview] [--ucs] [--help]
+    
 Examples:
     python bigscan.py                                              # Interactive mode
     python bigscan.py --user admin                                 # Specify user, prompt for password  
@@ -28,7 +34,10 @@ Examples:
     python bigscan.py --in devices.csv --out results.csv           # Bulk processing from CSV
     python bigscan.py --in devices.csv --user admin                # CSV with fallback credentials
     python bigscan.py --in devices.csv --qkview --out results.csv  # Include QKView creation
+    python bigscan.py --in devices.csv --ucs --out results.csv     # Include UCS backup creation
     python bigscan.py -q --qkview-timeout 1200 --in devices.csv    # QKView with 20min timeout
+    python bigscan.py --ucs --ucs-timeout 900 --in devices.csv     # UCS with 15min timeout
+    python bigscan.py --qkview --ucs --in devices.csv              # Both QKView and UCS
 """
 
 import argparse
@@ -56,8 +65,11 @@ Examples:
     python %(prog)s --in devices.csv --out results.csv           # Bulk processing from CSV
     python %(prog)s --in devices.csv --user admin                # CSV with fallback credentials
     python %(prog)s --in devices.csv --qkview --out results.csv  # Include QKView creation
+    python %(prog)s --in devices.csv --ucs --out results.csv     # Include UCS backup creation
     python %(prog)s -q --qkview-timeout 1200 --in devices.csv    # QKView with 20min timeout
-    python %(prog)s --qkview --no-delete --in devices.csv        # QKView without remote cleanup
+    python %(prog)s --ucs --ucs-timeout 900 --in devices.csv     # UCS with 15min timeout
+    python %(prog)s --qkview --ucs --in devices.csv              # Both QKView and UCS
+    python %(prog)s --qkview --ucs --no-delete --in devices.csv  # Both with no remote cleanup
         """
     )
     
@@ -79,12 +91,19 @@ Examples:
                        type=int,
                        default=1200,
                        help='Timeout for QKView creation in seconds (default: 1200)')
+    parser.add_argument('--ucs',
+                       action='store_true',
+                       help='Create and download UCS backup from each device')
+    parser.add_argument('--ucs-timeout',
+                       type=int,
+                       default=900,
+                       help='Timeout for UCS creation in seconds (default: 900)')
     parser.add_argument('--no-qkview',
                        action='store_true',
                        help='Disable QKView creation (default behavior)')
     parser.add_argument('--no-delete',
                        action='store_true',
-                       help='Do not delete QKView files from remote system after download (debugging option)')
+                       help='Do not delete QKView/UCS files from remote system after download (debugging option)')
     parser.add_argument('-vvv', '--verbose',
                        action='store_true',
                        help='Enable verbose debug output')
@@ -120,6 +139,31 @@ Examples:
             print(f"Using existing directory: {qkviews_dir}")
         print("")
     
+    # UCS information
+    if args.ucs:
+        print("UCS backup creation enabled")
+        print(f"UCS timeout set to {args.ucs_timeout} seconds ({args.ucs_timeout/60:.1f} minutes)")
+        print("UCS files will be downloaded to the 'UCS' directory")
+        if args.no_delete:
+            print("Remote UCS cleanup DISABLED - files will be left on BIG-IP devices")
+        else:
+            print("Remote UCS files will be cleaned up after successful download")
+        print("This will take additional time per device\n")
+        
+        # Create local UCS directory if it doesn't exist
+        ucs_dir = "UCS"
+        if not os.path.exists(ucs_dir):
+            os.makedirs(ucs_dir)
+            print(f"Created local directory: {ucs_dir}")
+        else:
+            print(f"Using existing directory: {ucs_dir}")
+        print("")
+    
+    # Warning if both QKView and UCS are enabled
+    if args.qkview and args.ucs:
+        print(f"{Colors.yellow('⚠')} Both QKView and UCS creation enabled - this will significantly increase processing time")
+        print("Consider running separately if processing many devices\n")
+    
     print("BIG-IP Device Information Extractor")
     print("=" * 40)
     
@@ -136,11 +180,18 @@ Examples:
         write_to_csv(devices_info, args.out)
         print(f"\nExtracted information for {len(devices_info)} device(s)")
         print(f"Results written to: {args.out}")
+        
         if args.qkview:
             qkview_count = sum(1 for device in devices_info if device.get('qkview_downloaded') == 'Yes')
             print(f"QKViews downloaded: {qkview_count}/{len(devices_info)}")
             if qkview_count > 0:
                 print(f"QKView files saved in: ./QKViews/")
+        
+        if args.ucs:
+            ucs_count = sum(1 for device in devices_info if device.get('ucs_downloaded') == 'Yes')
+            print(f"UCS backups downloaded: {ucs_count}/{len(devices_info)}")
+            if ucs_count > 0:
+                print(f"UCS files saved in: ./UCS/")
     else:
         print("No device information collected.")
         # Still create an empty CSV file with headers
@@ -150,3 +201,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
