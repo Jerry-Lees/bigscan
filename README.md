@@ -1,24 +1,22 @@
-# BIG-IP Device Information Extractor - Modular Version
+# BIG-IP Device Information Extractor 
 
-A comprehensive Python script for extracting detailed system information from F5 BIG-IP devices via REST API. This tool connects to BIG-IP devices and extracts hardware, software, licensing, and configuration information, exporting the data to CSV format for analysis and reporting.
+A Python script for extracting detailed system information from F5 BIG-IP devices via REST API. This tool connects to BIG-IP devices and extracts hardware, software, licensing, and configuration information, exporting the data to CSV format for analysis and reporting.
 
 ## Features
 
-- **Comprehensive Data Extraction**: Hostname, serial number, registration key, software version, hotfixes, platform info, and more
-- **Enhanced QKView Generation**: Creates and downloads QKView diagnostic files using F5's official autodeploy endpoint
-- **Real-time Progress Monitoring**: Live status updates with spinning progress indicators during QKView creation
-- **Multi-line Progress Display**: Terminal width-agnostic progress that works in any window size
-- **Flexible Remote Cleanup**: Optional cleanup of remote QKView files with `--no-delete` flag for debugging
-- **Bulk Processing**: Process multiple devices from CSV input file
-- **Flexible Authentication**: Command line credentials, interactive prompts, or CSV-based authentication
+- **Data Extraction**: Hostname, serial number, registration key, software version, hotfixes, platform info, software lifecycle dates, and more
+- **QKView Generation**: Creates and downloads QKView diagnostic files using F5's official REST API
+- **Real-time Progress Monitoring**: Live status updates and progress indicators during QKView creation
+- **Remote Cleanup**: Optional cleanup of remote QKView files or preventing it with the `--no-delete` flag
+- **Bulk Processing**: Process and gather data from multiple devices from CSV input file
+- **Authentication**: Command line credentials, interactive prompts, or CSV-based authentication
 - **Token-Based Authentication**: Uses BIG-IP REST API with secure token authentication and automatic timeout extension
-- **CSV Export**: Structured output for easy analysis and reporting
-- **Modular Architecture**: Clean, maintainable code structure with separate modules
-- **Cross-Platform**: Works on Linux, macOS, and Windows
+- **CSV Export**: Structured output for easy analysis and reporting of the data gathered
+- **Cross-Platform**: Should work on on Linux, macOS, and Windows with pything installed and a CLI avaiilable
 
 ## Modular Architecture
 
-This version has been refactored into a modular structure for better maintainability:
+This version has the following files in the following structure:
 
 ```
 bigscan/
@@ -36,7 +34,7 @@ bigscan/
 ```
 
 ### Module Benefits
-- **Maintainability**: Each module has a single responsibility
+- **Maintainability**: Each module has a single responsibility so it's extend-able and maintainable
 - **Reusability**: Components can be used independently or in other projects
 - **Testability**: Individual modules can be unit tested
 - **Extensibility**: Easy to add new features without modifying existing code
@@ -103,12 +101,12 @@ python bigscan.py --in test_devices.csv --out results.csv
 | `install.sh` | Installation and test script | Sets up dependencies and validates installation |
 | `README.md` | Documentation | This file - complete usage guide |
 
-### Generated Files (Created by Scripts)
+### Generated Files (Created by the installer script)
 
 | File | Description | Created By |
 |------|-------------|------------|
 | `bigip_device_info.csv` | Default output file | `bigscan.py` (default output) |
-| `test_devices.csv` | Sample input CSV template | `install.sh` |
+| `test_devices.csv` | Sample input CSV template file | `install.sh` |
 | `test_scanner.py` | Automated test suite | `install.sh` |
 | `bigip_scanner_env/` | Python virtual environment | `install.sh` |
 | `QKViews/` | QKView download directory | `bigscan.py` (when using --qkview) |
@@ -117,7 +115,7 @@ python bigscan.py --in test_devices.csv --out results.csv
 
 ### Automated Installation
 
-The `install.sh` script handles all dependencies and setup:
+The `install.sh` script handles all dependencies and setup teh following options are available:
 
 ```bash
 # Full installation with testing
@@ -130,7 +128,20 @@ The `install.sh` script handles all dependencies and setup:
 ./install.sh --help               # Show installation help
 ```
 
+### Installation Script  options (`install.sh`)
+
+| Option               | Description                        | Use Case                                   |
+| -------------------- | ---------------------------------- | ------------------------------------------ |
+| `--skip-system-deps` | Skip system package installation   | Docker containers, restricted environments |
+| `--python-only`      | Only install Python dependencies   | When system packages are already installed |
+| `--test-only`        | Only run tests (skip installation) | Verify existing installation               |
+| `--help`             | Show installation help             | Get detailed installation options          |
+
+## 
+
 ### Manual Installation
+
+While not recommended, the following should be all that is required to get the script running.
 
 ```bash
 # Install Python dependencies
@@ -141,15 +152,6 @@ python3 -m venv bigip_scanner_env
 source bigip_scanner_env/bin/activate
 pip install requests urllib3 certifi
 ```
-
-### Installation Script Options
-
-| Option | Description | Use Case |
-|--------|-------------|----------|
-| `--skip-system-deps` | Skip system package installation | Restricted environments, containers |
-| `--python-only` | Only install Python dependencies | When Python is already installed |
-| `--test-only` | Only run tests (skip installation) | Verify existing installation |
-| `--help` | Show installation help | Get detailed usage information |
 
 ## Usage
 
@@ -168,7 +170,7 @@ python bigscan.py --user admin --pass mypassword --out results.csv
 
 ### QKView Generation
 
-The script can create and download QKView diagnostic files using F5's official autodeploy endpoint:
+The script can create and download QKView diagnostic files using F5's official API:
 
 ```bash
 # Single device with QKView
@@ -188,6 +190,8 @@ python bigscan.py --user admin --qkview -vvv
 ```
 
 ### Bulk Processing
+
+The following are anticipated common combinations of CLI switches to accomplish common tasks in bulk, however the switch ""--?" will display them and the most current options in the next section.
 
 ```bash
 # Process multiple devices from CSV
@@ -231,15 +235,6 @@ python bigscan.py --in devices.csv --user admin --qkview --no-delete --out debug
 | `--qkview-timeout` | Custom timeout for QKView creation | Large systems, slow devices |
 | `-vvv` | Detailed debug output during QKView process | Troubleshooting QKView issues |
 
-### Installation Script (`install.sh`)
-
-| Option | Description | Use Case |
-|--------|-------------|----------|
-| `--skip-system-deps` | Skip system package installation | Docker containers, restricted environments |
-| `--python-only` | Only install Python dependencies | When system packages are already installed |
-| `--test-only` | Only run tests (skip installation) | Verify existing installation |
-| `--help` | Show installation help | Get detailed installation options |
-
 ## Input CSV Format
 
 Create a CSV file with device information for bulk processing:
@@ -271,7 +266,7 @@ bigip-lab.example.com,admin,
 
 ## Output Format
 
-The script generates a CSV file with the following columns:
+The script generates a CSV file with the following columns, below are explainations of each column in the csv file:
 
 | Column | Description | Example |
 |--------|-------------|---------|
@@ -295,22 +290,22 @@ The script generates a CSV file with the following columns:
 
 ## QKView Functionality
 
-### What is QKView?
-QKView is F5's diagnostic file format that contains comprehensive system information for troubleshooting. The script uses F5's official autodeploy endpoint for reliable QKView generation.
+### What is a QKView?
+A QKView is F5's diagnostic file format that contains comprehensive system information for troubleshooting. The script uses F5's official API for reliable QKView generation.
 
-### QKView Features
-- **F5 Autodeploy Endpoint**: Uses the official `/mgmt/cm/autodeploy/qkview` endpoint
+### QKView Gathering Features
+- **F5 API**: Uses the official `/mgmt/cm/autodeploy/qkview` endpoint
 - **Asynchronous Processing**: Monitors task completion with real-time progress
 - **Multi-line Progress Display**: Terminal width-agnostic progress indicators that work in any window size
 - **Automatic Download**: Downloads completed QKViews to local `QKViews/` directory
 - **Configurable Cleanup**: Automatically removes temporary files from BIG-IP devices (can be disabled with `--no-delete`)
-- **Progress Indicators**: Shows spinning progress and countdown timers
+- **Progress Indicators**: Shows progress and "countup" timers to display operation
 - **Error Handling**: Comprehensive error handling and recovery
-- **Chunked Downloads**: Efficient F5-standard chunked download method
+- **Downloads**: Utilizes the support REST API chunked download method
 
 ### QKView Remote File Management
 - **Default Behavior**: Downloads QKView and automatically cleans up remote files
-- **Debug Mode**: Use `--no-delete` to preserve remote files for troubleshooting
+- **Debug Mode**: Use `--no-delete` to preserve remote files for troubleshooting as well as --vvv for **really** chatty verbose output.
 - **Safety Features**: 
   - No cleanup if download fails
   - No cleanup if file size is suspiciously small (< 5MB)
@@ -426,14 +421,6 @@ python bigscan.py --user admin --qkview --no-delete -vvv
 df -h
 ```
 
-#### Progress Display Issues
-```bash
-# If progress lines are scrolling instead of updating in place:
-# 1. Expand terminal window width
-# 2. The script automatically handles narrow terminals with multi-line clearing
-# 3. Use -vvv for detailed troubleshooting output
-```
-
 #### Network/API Issues
 ```bash
 # Test basic connectivity
@@ -487,7 +474,7 @@ The script provides detailed progress information:
 - **Access**: Management interface access required
 - **Permissions**: Read-only access sufficient for device info, admin required for QKView
 - **Protocols**: HTTPS (port 443)
-- **QKView**: Autodeploy endpoint available in TMOS 13.0+
+- **QKView**: API available in TMOS 13.0+
 
 ## Security Considerations
 
@@ -551,7 +538,7 @@ python bigscan.py --user admin --qkview --no-delete -vvv
 ### Code Structure
 The script is modular and can be extended:
 - **BigIPInfoExtractor class**: Core device information extraction
-- **QKViewHandler class**: Enhanced QKView functionality using F5 autodeploy endpoint
+- **QKViewHandler class**: Enhanced QKView functionality using F5 API
 - **CSV handling modules**: Input/output CSV processing
 - **Authentication modules**: Token-based authentication with session management
 - **Progress reporting**: Real-time status updates with terminal-agnostic visual indicators
@@ -585,22 +572,23 @@ For issues and questions:
 
 ## Changelog
 
-### Version 2.1 (Current)
+### Version 1.0 (Current)
 - **Modular Architecture**: Refactored into clean, maintainable modules
 - **Enhanced Progress Display**: Multi-line clearing for terminal width independence
 - **Configurable Remote Cleanup**: Added `--no-delete` option for debugging
 - **Improved QKView Handling**: Better error handling and progress reporting
+- **UCS File Creation**: Similar handling and reporting as QKViews for UCS archive creation
 - **Verbose Debug Mode**: Added `-vvv` flag for detailed troubleshooting output
 
-### Version 2.0 (Previous)
-- Enhanced QKView functionality using F5 autodeploy endpoint
+### Version 0.91 
+- Enhanced QKView functionality using F5 API
 - Real-time progress monitoring with spinning indicators
 - Improved error handling and recovery
 - Better session management with token timeout extension
 - Automatic cleanup of remote files and tasks
 - Enhanced installation script with better dependency management
 
-### Version 1.0 (Legacy)
+### Version 0.9
 - Basic device information extraction
 - CSV input/output functionality
 - Token-based authentication
@@ -609,5 +597,5 @@ For issues and questions:
 ---
 
 **Last Updated**: January 2025  
-**Version**: 2.1  
+**Version**: 1.0  
 **Tested with**: TMOS 16.1.x, 17.1.x, Python 3.7-3.12
